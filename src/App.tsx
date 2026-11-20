@@ -1,9 +1,11 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
+import { OfflineVideoPlayerModal } from './components/offline/OfflineVideoPlayerModal';
 import { RowSkeleton } from './components/ui/Skeleton';
 import { AppModeProvider } from './hooks/useAppMode';
 import { LibraryProvider } from './hooks/useLibrary';
+import { OfflineDownloadsProvider } from './hooks/useOfflineDownloads';
 import { ThemeProvider } from './hooks/useTheme';
 import { getRouterMode, isTauriRuntime } from './utils/platform';
 
@@ -66,9 +68,12 @@ export default function App() {
     <ThemeProvider>
       <AppModeProvider>
         <LibraryProvider>
-          <RouterAdapter>
-            <AppRoutes />
-          </RouterAdapter>
+          <OfflineDownloadsProvider>
+            <RouterAdapter>
+              <AppRoutes />
+            </RouterAdapter>
+            <OfflineVideoPlayerModal />
+          </OfflineDownloadsProvider>
         </LibraryProvider>
       </AppModeProvider>
     </ThemeProvider>

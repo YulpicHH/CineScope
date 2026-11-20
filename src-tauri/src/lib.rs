@@ -1,16 +1,17 @@
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "macos")]
-use std::fs;
-#[cfg(target_os = "macos")]
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 #[cfg(desktop)]
 use tauri::{webview::NewWindowResponse, Theme};
-use tauri::{Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_http::reqwest;
 
 const KINOPOISK_API_URL: &str = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
@@ -138,10 +139,39 @@ browser {
 
 struct HttpClientState {
     client: reqwest::Client,
+    download_client: reqwest::Client,
 }
 
 struct PlayerWindowState {
     browser_child: Mutex<Option<Child>>,
+}
+
+struct OfflineDownloadState {
+    active: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OfflineDownloadProgressEvent {
+    pub download_id: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadedFileResult {
+    pub file_path: String,
+    pub file_name: String,
+    pub file_size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedLocalVideo {
+    pub file_path: String,
+    pub file_name: String,
+    pub file_size_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -607,6 +637,365 @@ async fn open_watch_window(
     Ok(())
 }
 
+fn get_downloads_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Не удалось получить каталог данных CineScope: {}", err))?;
+    let downloads_dir = base_dir.join("downloads");
+    fs::create_dir_all(&downloads_dir)
+        .map_err(|err| format!("Не удалось создать папку загрузок: {}", err))?;
+    Ok(downloads_dir)
+}
+
+fn sanitize_download_filename(raw: &str) -> String {
+    let base = Path::new(raw.trim())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("video.mp4");
+
+    let mut cleaned = String::with_capacity(base.len());
+    for ch in base.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            cleaned.push(ch);
+        } else if ch.is_whitespace() {
+            cleaned.push('_');
+        }
+    }
+
+    let trimmed = cleaned.trim_matches(|c| c == '.' || c == '_');
+    if trimmed.is_empty() {
+        return "video.mp4".to_string();
+    }
+
+    let truncated: String = trimmed.chars().take(120).collect();
+    if truncated.contains('.') {
+        truncated
+    } else {
+        format!("{}.mp4", truncated)
+    }
+}
+
+fn allocate_unique_target_path(dir: &Path, file_name: &str) -> (PathBuf, String) {
+    let candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return (candidate, file_name.to_string());
+    }
+
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("video");
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| !e.is_empty());
+
+    for index in 1..=999u32 {
+        let next_name = match ext {
+            Some(extension) => format!("{}_{}.{}", stem, index, extension),
+            None => format!("{}_{}", stem, index),
+        };
+        let next_path = dir.join(&next_name);
+        if !next_path.exists() {
+            return (next_path, next_name);
+        }
+    }
+
+    let fallback = format!("video_{}.mp4", std::process::id());
+    (dir.join(&fallback), fallback)
+}
+
+#[tauri::command]
+async fn start_offline_download(
+    app: tauri::AppHandle,
+    download_id: String,
+    url: String,
+    suggested_name: String,
+    http_state: State<'_, HttpClientState>,
+    download_state: State<'_, OfflineDownloadState>,
+) -> Result<DownloadedFileResult, String> {
+    let trimmed_url = url.trim();
+    let parsed_url = Url::parse(trimmed_url)
+        .map_err(|_| "Некорректная прямая ссылка на видеофайл.".to_string())?;
+    match parsed_url.scheme() {
+        "http" | "https" => {}
+        _ => {
+            return Err("Поддерживаются только прямые ссылки http и https.".to_string());
+        }
+    }
+
+    let downloads_dir = get_downloads_dir(&app)?;
+    let safe_name = sanitize_download_filename(&suggested_name);
+    let (final_path, final_name) = allocate_unique_target_path(&downloads_dir, &safe_name);
+    let part_path = downloads_dir.join(format!("{}.part", final_name));
+
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut guard) = download_state.active.lock() {
+        if let Some(prev_flag) = guard.insert(download_id.clone(), Arc::clone(&cancel_flag)) {
+            prev_flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    let result: Result<DownloadedFileResult, String> = async {
+        let mut response = http_state
+            .download_client
+            .get(parsed_url)
+            .send()
+            .await
+            .map_err(|err| format!("Не удалось подключиться к серверу загрузки: {}", err))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Сервер отклонил загрузку (код {}).",
+                response.status().as_u16()
+            ));
+        }
+
+        let total_bytes = response.content_length();
+        let mut file = File::create(&part_path)
+            .map_err(|err| format!("Не удалось создать файл для записи: {}", err))?;
+
+        let mut downloaded_bytes: u64 = 0;
+        let mut last_emit = Instant::now();
+
+        let _ = app.emit(
+            "offline-download-progress",
+            OfflineDownloadProgressEvent {
+                download_id: download_id.clone(),
+                downloaded_bytes: 0,
+                total_bytes,
+            },
+        );
+
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|err| format!("Обрыв соединения во время загрузки: {}", err))?
+        {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err("Загрузка отменена.".to_string());
+            }
+
+            file.write_all(&chunk)
+                .map_err(|err| format!("Ошибка записи видео на диск: {}", err))?;
+            downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
+
+            if last_emit.elapsed() >= Duration::from_millis(200) {
+                let _ = app.emit(
+                    "offline-download-progress",
+                    OfflineDownloadProgressEvent {
+                        download_id: download_id.clone(),
+                        downloaded_bytes,
+                        total_bytes,
+                    },
+                );
+                last_emit = Instant::now();
+            }
+        }
+
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err("Загрузка отменена.".to_string());
+        }
+
+        file.flush()
+            .map_err(|err| format!("Не удалось завершить запись видео на диск: {}", err))?;
+        drop(file);
+
+        fs::rename(&part_path, &final_path)
+            .map_err(|err| format!("Не удалось сохранить скачанный файл: {}", err))?;
+
+        let _ = app.emit(
+            "offline-download-progress",
+            OfflineDownloadProgressEvent {
+                download_id: download_id.clone(),
+                downloaded_bytes,
+                total_bytes: total_bytes.or(Some(downloaded_bytes)),
+            },
+        );
+
+        Ok(DownloadedFileResult {
+            file_path: final_path.to_string_lossy().to_string(),
+            file_name: final_name,
+            file_size_bytes: downloaded_bytes,
+        })
+    }
+    .await;
+
+    if let Ok(mut guard) = download_state.active.lock() {
+        guard.remove(&download_id);
+    }
+
+    if result.is_err() {
+        let _ = fs::remove_file(&part_path);
+    }
+
+    result
+}
+
+#[tauri::command]
+fn cancel_offline_download(
+    download_id: String,
+    download_state: State<'_, OfflineDownloadState>,
+) -> bool {
+    if let Ok(guard) = download_state.active.lock() {
+        if let Some(flag) = guard.get(&download_id) {
+            flag.store(true, Ordering::Relaxed);
+            return true;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+async fn pick_local_video_file() -> Result<Option<PickedLocalVideo>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            let script = r#"POSIX path of (choose file of type {"public.movie", "mp4", "mkv", "mov", "webm", "m4v", "avi"} with prompt "Выберите видеофайл для CineScope")"#;
+            let output = Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|err| format!("Не удалось открыть окно выбора файла macOS: {}", err))?;
+
+            if !output.status.success() {
+                return Ok(None);
+            }
+
+            let raw_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if raw_path.is_empty() {
+                return Ok(None);
+            }
+
+            let path = PathBuf::from(&raw_path);
+            if !path.is_file() {
+                return Err("Выбранный объект не является видеофайлом.".to_string());
+            }
+
+            let metadata = fs::metadata(&path)
+                .map_err(|err| format!("Не удалось прочитать свойства видеофайла: {}", err))?;
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("video.mp4")
+                .to_string();
+
+            Ok(Some(PickedLocalVideo {
+                file_path: raw_path,
+                file_name,
+                file_size_bytes: metadata.len(),
+            }))
+        })
+        .await
+        .map_err(|err| format!("Ошибка выбора видеофайла: {}", err))?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Выбор локального файла через Finder доступен только на macOS.".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_offline_video(file_path: String) -> Result<(), String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("Путь к видеофайлу пуст.".to_string());
+    }
+    let path = Path::new(trimmed);
+    if !path.is_file() {
+        return Err("Видеофайл не найден на диске. Возможно, он был перемещён или удалён.".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| format!("Не удалось запустить системный видеоплеер: {}", err))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Открытие видео в системном плеере поддерживается на macOS.".to_string())
+    }
+}
+
+#[tauri::command]
+fn reveal_offline_file(file_path: String) -> Result<(), String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("Путь к видеофайлу пуст.".to_string());
+    }
+    let path = Path::new(trimmed);
+    if !path.exists() {
+        return Err("Файл не найден на диске.".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| format!("Не удалось открыть файл в Finder: {}", err))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Показ файла в Finder поддерживается только на macOS.".to_string())
+    }
+}
+
+#[tauri::command]
+fn delete_offline_file(app: tauri::AppHandle, file_path: String) -> Result<bool, String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+
+    let downloads_dir = get_downloads_dir(&app)?;
+    let canonical_downloads = fs::canonicalize(&downloads_dir)
+        .map_err(|err| format!("Не удалось проверить каталог загрузок: {}", err))?;
+
+    let target = PathBuf::from(trimmed);
+    if !target.exists() {
+        return Ok(false);
+    }
+
+    let canonical_target = match fs::canonicalize(&target) {
+        Ok(path) => path,
+        Err(_) => return Ok(false),
+    };
+
+    // Безопасность: удаляем файл с диска ТОЛЬКО если он лежит внутри собственной папки downloads CineScope
+    if canonical_target.starts_with(&canonical_downloads) && canonical_target.is_file() {
+        fs::remove_file(&canonical_target)
+            .map_err(|err| format!("Не удалось удалить скачанный файл с диска: {}", err))?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+#[tauri::command]
+fn verify_offline_files(paths: Vec<String>) -> HashMap<String, bool> {
+    let mut map = HashMap::with_capacity(paths.len());
+    for p in paths {
+        let exists = Path::new(p.trim()).is_file();
+        map.insert(p, exists);
+    }
+    map
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let client = reqwest::Client::builder()
@@ -614,10 +1003,21 @@ pub fn run() {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
+    let download_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
     tauri::Builder::default()
-        .manage(HttpClientState { client })
+        .manage(HttpClientState {
+            client,
+            download_client,
+        })
         .manage(PlayerWindowState {
             browser_child: Mutex::new(None),
+        })
+        .manage(OfflineDownloadState {
+            active: Mutex::new(HashMap::new()),
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
@@ -625,7 +1025,14 @@ pub fn run() {
             fetch_kinopoisk_candidates,
             open_watch_window,
             check_player_browsers,
-            check_firefox_available
+            check_firefox_available,
+            start_offline_download,
+            cancel_offline_download,
+            pick_local_video_file,
+            open_offline_video,
+            reveal_offline_file,
+            delete_offline_file,
+            verify_offline_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineScope application");

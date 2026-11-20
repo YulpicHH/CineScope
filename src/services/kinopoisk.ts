@@ -8,7 +8,9 @@ import {
   type KinopoiskCacheRecord,
 } from '../utils/kinopoiskMatcher';
 import { isTauriRuntime } from '../utils/platform';
+import type { PlayerProfileId } from '../utils/playerProfile';
 import { getKinopoiskApiKeyValue } from './apiKeys';
+import { getPlayerProfile } from './playerSettings';
 
 const KP_CLIENT_CACHE_KEY = 'cinescope_kp_cache_v1';
 
@@ -433,14 +435,20 @@ export async function resolveWatchLink(
   return pending;
 }
 
-export async function openWatchWindow(url: string, title: string): Promise<void> {
+export async function openWatchWindow(
+  url: string,
+  title: string,
+  playerProfile?: PlayerProfileId,
+): Promise<void> {
   const trimmedUrl = url.trim();
   if (!trimmedUrl) return;
 
   if (isTauriRuntime()) {
+    const resolvedProfile = playerProfile ?? getPlayerProfile();
     await invoke('open_watch_window', {
       url: trimmedUrl,
       title: title.trim(),
+      playerProfile: resolvedProfile,
     });
     return;
   }

@@ -8,6 +8,7 @@ import {
   Film,
   KeyRound,
   Loader2,
+  MonitorPlay,
   Play,
   ShieldCheck,
   Trash2,
@@ -15,8 +16,14 @@ import {
 } from 'lucide-react';
 import { useAppMode } from '../../hooks/useAppMode';
 import { validateTmdbApiKey } from '../../services/apiKeys';
+import { getPlayerProfile, setPlayerProfile } from '../../services/playerSettings';
 import { hasInternalWhitespace } from '../../utils/apiKeysRules';
 import { isTauriRuntime, openExternalUrl } from '../../utils/platform';
+import {
+  PLAYER_PROFILE_OPTIONS,
+  getPlayerProfileOption,
+  type PlayerProfileId,
+} from '../../utils/playerProfile';
 
 const TMDB_API_SETTINGS_URL = 'https://www.themoviedb.org/settings/api';
 const KINOPOISK_API_URL = 'https://kinopoiskapiunofficial.tech';
@@ -42,12 +49,16 @@ export function ApiSettingsModal() {
 
   const [tmdbInput, setTmdbInput] = useState(userTmdbApiKey);
   const [kinopoiskInput, setKinopoiskInput] = useState(userKinopoiskApiKey);
+  const [playerProfile, setPlayerProfileState] = useState<PlayerProfileId>(() =>
+    getPlayerProfile(),
+  );
   const [showTmdbKey, setShowTmdbKey] = useState(false);
   const [showKpKey, setShowKpKey] = useState(false);
   const [validating, setValidating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const prevOpenRef = useRef(false);
+  const isDesktopTauri = isTauriRuntime();
 
   useEffect(() => {
     const wasOpen = prevOpenRef.current;
@@ -55,6 +66,7 @@ export function ApiSettingsModal() {
     if (isOpen && !wasOpen) {
       setTmdbInput(userTmdbApiKey);
       setKinopoiskInput(userKinopoiskApiKey);
+      setPlayerProfileState(getPlayerProfile());
       setShowTmdbKey(false);
       setShowKpKey(false);
       setErrorMessage(null);
@@ -142,6 +154,18 @@ export function ApiSettingsModal() {
     setErrorMessage(null);
     setInfoMessage('Сохранённые пользовательские ключи удалены с этого устройства.');
   };
+
+  const handleSelectPlayerProfile = (nextProfile: PlayerProfileId) => {
+    if (validating) return;
+    const saved = setPlayerProfile(nextProfile);
+    setPlayerProfileState(saved);
+    setErrorMessage(null);
+    setInfoMessage(
+      `Профиль плеера «${getPlayerProfileOption(saved).shortLabel}» сохранён — применится при следующем открытии окна просмотра.`,
+    );
+  };
+
+  const activePlayerOption = getPlayerProfileOption(playerProfile);
 
   return (
     <div
@@ -317,6 +341,56 @@ export function ApiSettingsModal() {
               Используется для автоматического поиска ссылки на просмотр. Можно добавить позже.
             </p>
           </div>
+
+          {/* Профиль встроенного плеера (только в десктопном Tauri-приложении) */}
+          {isDesktopTauri && !isFirstRun ? (
+            <div
+              className="space-y-2.5 border-t border-white/[0.08] pt-4"
+              data-testid="player-profile-section"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <MonitorPlay className="h-4 w-4 text-blue-400" aria-hidden="true" />
+                  <span>Встроенный плеер (4K)</span>
+                </div>
+                <span className="text-[11px] font-medium text-slate-400">
+                  Применяется сразу
+                </span>
+              </div>
+
+              <div
+                role="radiogroup"
+                aria-label="Профиль совместимости встроенного плеера"
+                className="grid grid-cols-3 gap-2"
+              >
+                {PLAYER_PROFILE_OPTIONS.map((option) => {
+                  const selected = playerProfile === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      data-testid={`player-profile-${option.id}`}
+                      disabled={validating}
+                      onClick={() => handleSelectPlayerProfile(option.id)}
+                      className={`rounded-xl border px-2.5 py-2 text-center text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50 ${
+                        selected
+                          ? 'border-blue-500/70 bg-blue-600/20 text-white'
+                          : 'border-white/10 bg-[#090B10] text-slate-300 hover:border-white/25 hover:text-white'
+                      }`}
+                    >
+                      {option.shortLabel}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="text-xs leading-relaxed text-slate-400">
+                {activePlayerOption.description}
+              </p>
+            </div>
+          ) : null}
 
           {errorMessage ? (
             <div

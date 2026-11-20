@@ -17,9 +17,10 @@ import {
 import { useAppMode } from '../../hooks/useAppMode';
 import { validateTmdbApiKey } from '../../services/apiKeys';
 import {
-  checkFirefoxAvailable,
+  checkPlayerBrowsers,
   getPlayerMode,
   setPlayerMode,
+  type AvailablePlayerBrowsers,
 } from '../../services/playerSettings';
 import { hasInternalWhitespace } from '../../utils/apiKeysRules';
 import { isTauriRuntime, openExternalUrl } from '../../utils/platform';
@@ -56,7 +57,8 @@ export function ApiSettingsModal() {
   const [playerMode, setPlayerModeState] = useState<PlayerModeId>(() =>
     getPlayerMode(),
   );
-  const [firefoxAvailable, setFirefoxAvailable] = useState<boolean | null>(null);
+  const [availableBrowsers, setAvailableBrowsers] =
+    useState<AvailablePlayerBrowsers | null>(null);
   const [showTmdbKey, setShowTmdbKey] = useState(false);
   const [showKpKey, setShowKpKey] = useState(false);
   const [validating, setValidating] = useState(false);
@@ -82,9 +84,9 @@ export function ApiSettingsModal() {
   useEffect(() => {
     if (!isOpen || !isDesktopTauri || isFirstRun) return;
     let active = true;
-    void checkFirefoxAvailable().then((available) => {
+    void checkPlayerBrowsers().then((browsers) => {
       if (active) {
-        setFirefoxAvailable(available);
+        setAvailableBrowsers(browsers);
       }
     });
     return () => {
@@ -367,35 +369,61 @@ export function ApiSettingsModal() {
               className="space-y-2.5 border-t border-white/[0.08] pt-4"
               data-testid="player-mode-section"
             >
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sm font-semibold text-white">
                   <MonitorPlay className="h-4 w-4 text-blue-400" aria-hidden="true" />
-                  <span>Режим плеера</span>
+                  <span>Браузер для просмотра</span>
                 </div>
-                {firefoxAvailable === true ? (
+                {playerMode === 'firefox_window' && availableBrowsers ? (
+                  availableBrowsers.firefox ? (
+                    <span
+                      data-testid="browser-status-badge"
+                      className="text-[11px] font-medium text-emerald-400"
+                    >
+                      Firefox готов
+                    </span>
+                  ) : (
+                    <span
+                      data-testid="browser-status-badge"
+                      className="text-[11px] font-medium text-amber-300"
+                    >
+                      Firefox не найден — откроется встроенное окно
+                    </span>
+                  )
+                ) : playerMode === 'chrome_window' && availableBrowsers ? (
+                  availableBrowsers.chrome ? (
+                    <span
+                      data-testid="browser-status-badge"
+                      className="text-[11px] font-medium text-emerald-400"
+                    >
+                      Chrome готов
+                    </span>
+                  ) : (
+                    <span
+                      data-testid="browser-status-badge"
+                      className="text-[11px] font-medium text-amber-300"
+                    >
+                      Chrome не найден — откроется встроенное окно
+                    </span>
+                  )
+                ) : playerMode === 'embedded_webkit' ? (
                   <span
-                    data-testid="firefox-status-badge"
-                    className="text-[11px] font-medium text-emerald-400"
+                    data-testid="browser-status-badge"
+                    className="text-[11px] font-medium text-slate-400"
                   >
-                    Firefox готов
-                  </span>
-                ) : firefoxAvailable === false ? (
-                  <span
-                    data-testid="firefox-status-badge"
-                    className="text-[11px] font-medium text-amber-300"
-                  >
-                    Firefox не найден — откроется встроенное окно
+                    Внутри приложения
                   </span>
                 ) : null}
               </div>
 
               <div
                 role="radiogroup"
-                aria-label="Режим окна просмотра"
-                className="grid grid-cols-2 gap-2.5"
+                aria-label="Выбор браузера для окна просмотра"
+                className="grid grid-cols-3 gap-2"
               >
                 {PLAYER_MODE_OPTIONS.map((option) => {
                   const selected = playerMode === option.id;
+                  const isHighRes = option.badge === '4K';
                   return (
                     <button
                       key={option.id}
@@ -405,21 +433,25 @@ export function ApiSettingsModal() {
                       data-testid={`player-mode-${option.id}`}
                       disabled={validating}
                       onClick={() => handleSelectPlayerMode(option.id)}
-                      className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50 ${
+                      className={`flex flex-col items-start gap-0.5 rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50 ${
                         selected
                           ? 'border-blue-500/70 bg-blue-600/20 text-white'
                           : 'border-white/10 bg-[#090B10] text-slate-300 hover:border-white/25 hover:text-white'
                       }`}
                     >
-                      <span className="text-xs font-semibold">{option.label}</span>
+                      <span className="text-xs font-semibold leading-tight">
+                        {option.label}
+                      </span>
                       <span
-                        className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-                          option.id === 'firefox_window'
-                            ? 'bg-blue-500/25 text-blue-200'
-                            : 'bg-white/10 text-slate-300'
+                        className={`text-[11px] font-medium leading-tight ${
+                          isHighRes
+                            ? selected
+                              ? 'text-blue-300'
+                              : 'text-blue-400/90'
+                            : 'text-slate-400'
                         }`}
                       >
-                        {option.badge}
+                        {isHighRes ? 'до 4K' : option.badge}
                       </span>
                     </button>
                   );

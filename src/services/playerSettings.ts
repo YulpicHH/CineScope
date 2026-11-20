@@ -10,6 +10,11 @@ import {
 
 const PLAYER_MODE_STORAGE_KEY = 'cinescope_player_profile_v1';
 
+export interface AvailablePlayerBrowsers {
+  firefox: boolean;
+  chrome: boolean;
+}
+
 export function getPlayerMode(): PlayerModeId {
   if (typeof window === 'undefined') return DEFAULT_PLAYER_MODE;
   try {
@@ -35,12 +40,19 @@ export function setPlayerMode(mode: PlayerModeId): PlayerModeId {
   return normalized;
 }
 
-export async function checkFirefoxAvailable(): Promise<boolean> {
-  if (!isTauriRuntime()) return false;
+export async function checkPlayerBrowsers(): Promise<AvailablePlayerBrowsers> {
+  if (!isTauriRuntime()) {
+    return { firefox: false, chrome: false };
+  }
   try {
-    const available = await invoke<boolean>('check_firefox_available');
-    return Boolean(available);
+    const result = await invoke<Partial<AvailablePlayerBrowsers>>(
+      'check_player_browsers',
+    );
+    return {
+      firefox: Boolean(result?.firefox),
+      chrome: Boolean(result?.chrome),
+    };
   } catch {
-    return false;
+    return { firefox: false, chrome: false };
   }
 }

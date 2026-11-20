@@ -50,12 +50,12 @@ export function RandomPickModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="random-pick-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      className="safe-modal-inset fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="animate-hero-enter relative w-full max-w-[720px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-white/12 dark:bg-[#11151E]">
+      <div className="animate-hero-enter safe-modal-panel relative w-full max-w-[720px] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-white/12 dark:bg-[#11151E]">
         {/* Верхняя строка */}
         <div className="flex items-center justify-between border-b border-slate-200/80 px-5 py-4 dark:border-white/[0.08]">
           <div>

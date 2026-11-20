@@ -60,18 +60,66 @@ export function detectClientPlatform(): DesktopPlatform {
   return detectPlatformFromStrings(platformStr, userAgentStr);
 }
 
+export function isIOSSafariUserAgent(
+  userAgent: string,
+  maxTouchPoints = 0,
+): boolean {
+  const ua = userAgent.toLowerCase();
+  const isIOSDevice =
+    /iphone|ipad|ipod/.test(ua) ||
+    (ua.includes('macintosh') && maxTouchPoints > 1);
+  if (!isIOSDevice) return false;
+
+  const isWebKit = ua.includes('webkit') && ua.includes('safari');
+  const isOtherIOSBrowser = /crios|fxios|edgios|opios|yabrowser|duckduckgo/.test(
+    ua,
+  );
+  return isWebKit && !isOtherIOSBrowser;
+}
+
+export function isStandalonePwa(): boolean {
+  if (typeof window === 'undefined') return false;
+  const nav = window.navigator as Navigator & { standalone?: boolean };
+  return (
+    nav.standalone === true ||
+    window.matchMedia?.('(display-mode: standalone)').matches === true
+  );
+}
+
 export function getRouterMode(isTauriEnv: boolean): 'hash' | 'browser' {
   return isTauriEnv ? 'hash' : 'browser';
 }
 
+function isSafeHttpUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
-  if (!url) return;
+  const trimmed = url.trim();
+  if (!trimmed || !isSafeHttpUrl(trimmed)) return;
 
   if (isTauriRuntime()) {
     const { openUrl } = await import('@tauri-apps/plugin-opener');
-    await openUrl(url);
+    await openUrl(trimmed);
     return;
   }
 
-  window.open(url, '_blank', 'noopener,noreferrer');
+  // В iOS standalone PWA открытие внешней ссылки с target="_blank" и rel="noopener noreferrer"
+  // открывает встроенный системный просмотр Safari (SFSafariViewController) без потери состояния PWA.
+  const popup = window.open(trimmed, '_blank', 'noopener,noreferrer');
+  if (!popup && typeof document !== 'undefined') {
+    const anchor = document.createElement('a');
+    anchor.href = trimmed;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  }
 }

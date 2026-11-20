@@ -185,7 +185,7 @@ export function LibraryPage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Поиск внутри списка..."
-              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
+              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
             />
           </div>
 
@@ -201,7 +201,7 @@ export function LibraryPage() {
                   e.target.value === '' ? '' : Number(e.target.value),
                 )
               }
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-900 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
             >
               <option value="">Все жанры</option>
               {availableGenres.map((genre) => (

@@ -2,7 +2,10 @@
 <html lang="ru" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <title>CineScope — Поиск фильмов и сериалов по настроению</title>
     <meta
       name="description"
@@ -15,6 +18,14 @@
     />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#090B10" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="CineScope" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -33,7 +44,7 @@
       })();
     </script>
   </head>
-  <body class="bg-[#F6F7FA] text-[#0F172A] dark:bg-[#090B10] dark:text-[#F3F5F9] antialiased selection:bg-blue-500/30 selection:text-blue-200">
+  <body class="bg-[#090B10] text-[#F3F5F9] antialiased selection:bg-blue-500/30 selection:text-blue-200">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -10,11 +10,14 @@ import {
   Loader2,
   MonitorPlay,
   Play,
+  Share,
   ShieldCheck,
+  Smartphone,
   Trash2,
   X,
 } from 'lucide-react';
 import { useAppMode } from '../../hooks/useAppMode';
+import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { validateTmdbApiKey } from '../../services/apiKeys';
 import {
   checkPlayerBrowsers,
@@ -76,6 +79,7 @@ export function ApiSettingsModal() {
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const prevOpenRef = useRef(false);
   const isDesktopTauri = isTauriRuntime();
+  const { isIOSSafari, canPromptInstall, triggerInstall } = usePWAInstall();
 
   useEffect(() => {
     const wasOpen = prevOpenRef.current;
@@ -207,7 +211,7 @@ export function ApiSettingsModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+      className="safe-modal-inset fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/75 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="api-settings-modal-title"
@@ -218,7 +222,7 @@ export function ApiSettingsModal() {
         }
       }}
     >
-      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/[0.1] bg-[#11151E] text-[#F3F5F9] shadow-2xl">
+      <div className="safe-modal-panel relative w-full max-w-lg overflow-y-auto rounded-2xl border border-white/[0.1] bg-[#11151E] text-[#F3F5F9] shadow-2xl">
         {/* Верхняя полоса заголовка */}
         <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] px-6 py-5">
           <div className="space-y-1">
@@ -295,7 +299,7 @@ export function ApiSettingsModal() {
                 autoComplete="off"
                 spellCheck={false}
                 disabled={validating}
-                className="w-full rounded-xl border border-white/12 bg-[#090B10] py-2.5 pl-3.5 pr-11 font-mono text-sm text-white placeholder:font-sans placeholder:text-slate-500 focus:border-blue-500 focus:outline-none disabled:opacity-60"
+                className="w-full rounded-xl border border-white/12 bg-[#090B10] py-2.5 pl-3.5 pr-11 font-mono text-base text-white placeholder:font-sans placeholder:text-slate-500 focus:border-blue-500 focus:outline-none disabled:opacity-60 sm:text-sm"
               />
               <button
                 type="button"
@@ -357,7 +361,7 @@ export function ApiSettingsModal() {
                 autoComplete="off"
                 spellCheck={false}
                 disabled={validating}
-                className="w-full rounded-xl border border-white/12 bg-[#090B10] py-2.5 pl-3.5 pr-11 font-mono text-sm text-white placeholder:font-sans placeholder:text-slate-500 focus:border-blue-500 focus:outline-none disabled:opacity-60"
+                className="w-full rounded-xl border border-white/12 bg-[#090B10] py-2.5 pl-3.5 pr-11 font-mono text-base text-white placeholder:font-sans placeholder:text-slate-500 focus:border-blue-500 focus:outline-none disabled:opacity-60 sm:text-sm"
               />
               <button
                 type="button"
@@ -575,6 +579,49 @@ export function ApiSettingsModal() {
               )}
             </button>
           </div>
+
+          {/* Подсказка установки PWA на экран «Домой» (только в веб-браузере вне standalone и вне Tauri) */}
+          {!isDesktopTauri && (isIOSSafari || canPromptInstall) ? (
+            <div
+              data-testid="pwa-install-hint"
+              className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-white/10 bg-[#090B10] px-3.5 py-2.5 text-xs text-slate-300"
+            >
+              {isIOSSafari ? (
+                <div className="flex items-start gap-2.5 leading-relaxed">
+                  <Share
+                    className="mt-0.5 h-4 w-4 shrink-0 text-blue-400"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    Установить на iPhone: нажмите{' '}
+                    <strong className="font-semibold text-white">Поделиться</strong>{' '}
+                    →{' '}
+                    <strong className="font-semibold text-white">
+                      На экран «Домой»
+                    </strong>
+                    .
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <Smartphone
+                      className="h-4 w-4 shrink-0 text-blue-400"
+                      aria-hidden="true"
+                    />
+                    <span>Установить CineScope как приложение</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void triggerInstall()}
+                    className="whitespace-nowrap rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-500"
+                  >
+                    Установить
+                  </button>
+                </>
+              )}
+            </div>
+          ) : null}
 
           <div className="flex items-center gap-2 border-t border-white/[0.06] pt-3 text-[11px] text-slate-500">
             <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />

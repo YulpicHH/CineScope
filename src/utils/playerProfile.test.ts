@@ -15,6 +15,7 @@ import {
 } from './playerProfile';
 import {
   detectPlatformFromStrings,
+  isIOSSafariUserAgent,
   normalizeDesktopPlatform,
 } from './platform';
 
@@ -122,4 +123,20 @@ test('detectPlatformFromStrings and normalizeDesktopPlatform identify Windows, m
   assert.equal(normalizeDesktopPlatform('MACOS'), 'macos');
   assert.equal(normalizeDesktopPlatform('unknown', 'windows'), 'windows');
   assert.equal(normalizeDesktopPlatform(null), 'web');
+});
+
+test('isIOSSafariUserAgent distinguishes iPhone/iPad Safari from iOS Chrome and desktop Safari', () => {
+  const iphoneSafari =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+  const iphoneChrome =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1';
+  const ipadDesktopMode =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
+  const macDesktopSafari =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
+
+  assert.equal(isIOSSafariUserAgent(iphoneSafari, 5), true);
+  assert.equal(isIOSSafariUserAgent(iphoneChrome, 5), false);
+  assert.equal(isIOSSafariUserAgent(ipadDesktopMode, 5), true);
+  assert.equal(isIOSSafariUserAgent(macDesktopSafari, 0), false);
 });

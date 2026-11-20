@@ -189,6 +189,7 @@ async function startServer() {
 
   // Маршрут поиска Kinopoisk ID по данным TMDB для формирования внешней ссылки на просмотр
   app.post('/api/kinopoisk/resolve', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     const body = (req.body ?? {}) as KinopoiskResolvePayload;
     const tmdbId = typeof body.tmdbId === 'number' ? body.tmdbId : Number(body.tmdbId);
     const mediaType: 'movie' | 'tv' | null =
@@ -197,9 +198,9 @@ async function startServer() {
         : body.mediaType === 'tv'
           ? 'tv'
           : null;
-    const title = typeof body.title === 'string' ? body.title.trim() : '';
-    const originalTitle = typeof body.originalTitle === 'string' ? body.originalTitle.trim() : '';
-    const year = typeof body.year === 'string' ? body.year.trim() : '';
+    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : '';
+    const originalTitle = typeof body.originalTitle === 'string' ? body.originalTitle.trim().slice(0, 200) : '';
+    const year = typeof body.year === 'string' ? body.year.trim().slice(0, 10) : '';
 
     if (!Number.isInteger(tmdbId) || tmdbId <= 0 || !mediaType || (!title && !originalTitle)) {
       res.status(400).json({
@@ -211,14 +212,23 @@ async function startServer() {
       return;
     }
 
-    const headerApiKey = req.header('x-kinopoisk-api-key')?.trim() ?? '';
-    const envApiKey = process.env.KINOPOISK_API_KEY?.trim() ?? '';
-    const apiKey =
-      headerApiKey && headerApiKey !== 'MY_KINOPOISK_API_KEY'
-        ? headerApiKey
-        : envApiKey && envApiKey !== 'MY_KINOPOISK_API_KEY'
-          ? envApiKey
-          : '';
+    const rawHeaderKey = req.header('x-kinopoisk-api-key')?.trim() ?? '';
+    const headerApiKey =
+      rawHeaderKey &&
+      rawHeaderKey !== 'MY_KINOPOISK_API_KEY' &&
+      rawHeaderKey.length <= 128 &&
+      !/[\s\r\n]/.test(rawHeaderKey)
+        ? rawHeaderKey
+        : '';
+    const rawEnvKey = process.env.KINOPOISK_API_KEY?.trim() ?? '';
+    const envApiKey =
+      rawEnvKey &&
+      rawEnvKey !== 'MY_KINOPOISK_API_KEY' &&
+      rawEnvKey.length <= 128 &&
+      !/[\s\r\n]/.test(rawEnvKey)
+        ? rawEnvKey
+        : '';
+    const apiKey = headerApiKey || envApiKey;
 
     if (!apiKey) {
       res.status(503).json({

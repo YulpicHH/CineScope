@@ -7,7 +7,7 @@ import {
   type KinopoiskApiCandidate,
   type KinopoiskCacheRecord,
 } from '../utils/kinopoiskMatcher';
-import { isTauriRuntime } from '../utils/platform';
+import { isTauriRuntime, openExternalUrl } from '../utils/platform';
 import type { PlayerModeId } from '../utils/playerProfile';
 import { getKinopoiskApiKeyValue } from './apiKeys';
 import { getPlayerMode } from './playerSettings';
@@ -392,7 +392,8 @@ export async function resolveWatchLink(
     };
   }
 
-  if (isTauriRuntime() && !getKinopoiskApiKeyValue()) {
+  const shouldRequireUserKey = isTauriRuntime() || import.meta.env.PROD;
+  if (shouldRequireUserKey && !getKinopoiskApiKeyValue()) {
     return {
       status: 'missing_key',
       message:
@@ -453,5 +454,5 @@ export async function openWatchWindow(
     return;
   }
 
-  window.open(trimmedUrl, '_blank', 'noopener,noreferrer');
+  await openExternalUrl(trimmedUrl);
 }

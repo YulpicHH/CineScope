@@ -165,7 +165,7 @@ export function CatalogFilterBar({
                 ? 'Название аниме, режиссёр или сэйю...'
                 : 'Название фильма или сериала, актёр, режиссёр...'
             }
-            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-9 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100 dark:placeholder:text-slate-500"
+            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-9 text-base text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100 dark:placeholder:text-slate-500"
           />
           {filters.query ? (
             <button
@@ -223,7 +223,7 @@ export function CatalogFilterBar({
                 id="filter-country"
                 value={filters.country}
                 onChange={(e) => onChange({ ...filters, country: e.target.value })}
-                className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
+                className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-base text-slate-900 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
               >
                 {CATALOG_COUNTRIES.map((country) => (
                   <option key={country.code || 'any'} value={country.code}>
@@ -246,7 +246,7 @@ export function CatalogFilterBar({
             id="filter-year"
             value={filters.year}
             onChange={(e) => onChange({ ...filters, year: e.target.value })}
-            className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
+            className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-base text-slate-900 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
           >
             <option value="">Любой год</option>
             {YEARS.map((year) => (
@@ -270,7 +270,7 @@ export function CatalogFilterBar({
             onChange={(e) =>
               onChange({ ...filters, minRating: Number(e.target.value) })
             }
-            className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
+            className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-base text-slate-900 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
           >
             {RATING_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -293,7 +293,7 @@ export function CatalogFilterBar({
             onChange={(e) =>
               onChange({ ...filters, sortBy: e.target.value as SortOption })
             }
-            className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
+            className="h-[38px] rounded-lg border border-slate-200 bg-white px-3 text-base text-slate-900 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100"
           >
             {SORT_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>

@@ -15,7 +15,7 @@ export function MobileNav() {
   return (
     <nav
       aria-label="Мобильная навигация"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200/80 bg-white/95 backdrop-blur-sm dark:border-white/[0.08] dark:bg-[#090B10]/95 md:hidden"
+      className="safe-pb safe-px fixed inset-x-0 bottom-0 z-40 border-t border-slate-200/80 bg-white/95 backdrop-blur-sm dark:border-white/[0.08] dark:bg-[#090B10]/95 md:hidden"
     >
       <div className="grid h-16 grid-cols-5">
         {MOBILE_TABS.map((tab) => {

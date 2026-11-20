@@ -10,11 +10,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { isDemoMode, hasApiKey, openSettingsModal } = useAppMode();
 
   return (
-    <div className="flex min-h-screen flex-col overflow-x-clip bg-[#F6F7FA] text-slate-900 dark:bg-[#090B10] dark:text-[#F3F5F9]">
+    <div className="flex min-h-dvh flex-col overflow-x-clip bg-[#F6F7FA] text-slate-900 dark:bg-[#090B10] dark:text-[#F3F5F9]">
       <Header />
 
       {isDemoMode && !hasApiKey ? (
-        <div className="border-b border-blue-200/80 bg-blue-50/80 px-4 py-2 text-xs text-blue-900 dark:border-blue-500/20 dark:bg-blue-950/30 dark:text-blue-200">
+        <div className="safe-px border-b border-blue-200/80 bg-blue-50/80 px-4 py-2 text-xs text-blue-900 dark:border-blue-500/20 dark:bg-blue-950/30 dark:text-blue-200">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 sm:px-2 lg:px-4">
             <span>
               Демо-режим: показаны демонстрационные данные без живого подключения к TMDB API.
@@ -30,7 +30,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       ) : null}
 
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-24 pt-6 sm:px-6 md:pb-12 lg:px-8">
+      <main className="safe-px safe-main-pb mx-auto w-full max-w-7xl flex-1 px-4 pt-6 sm:px-6 lg:px-8">
         {children}
       </main>
 

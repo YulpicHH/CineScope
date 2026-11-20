@@ -10,7 +10,7 @@ export function Toast() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-20 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 shadow-lg dark:border-white/15 dark:bg-[#141923] dark:text-slate-100 md:bottom-6 md:right-6"
+      className="safe-toast-offset fixed z-50 flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 shadow-lg dark:border-white/15 dark:bg-[#141923] dark:text-slate-100 md:w-auto"
     >
       <span className="flex-1">{toast.text}</span>
       <button

@@ -1,9 +1,62 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tauri::State;
+#[cfg(desktop)]
+use tauri::{webview::NewWindowResponse, Theme};
+use tauri::{Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_http::reqwest;
 
 const KINOPOISK_API_URL: &str = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
+const PLAYER_WINDOW_LABEL: &str = "player";
+
+const PLAYER_POPUP_BLOCK_SCRIPT: &str = r#"
+(() => {
+  if (window.__cinescopePopupGuardInstalled) return;
+  window.__cinescopePopupGuardInstalled = true;
+
+  try {
+    Object.defineProperty(window, 'open', {
+      configurable: true,
+      writable: true,
+      value: function () {
+        return null;
+      },
+    });
+  } catch {
+    try {
+      window.open = function () {
+        return null;
+      };
+    } catch {
+      // Игнорируем, если страница запретила переопределение window.open
+    }
+  }
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest('a[href]');
+      if (!anchor) return;
+      const linkTarget = (anchor.getAttribute('target') || '').toLowerCase();
+      if (linkTarget !== '_blank') return;
+
+      const href = anchor.getAttribute('href') || '';
+      try {
+        const parsed = new URL(href, window.location.href);
+        if (parsed.origin !== window.location.origin) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      } catch {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    },
+    true,
+  );
+})();
+"#;
 
 struct HttpClientState {
     client: reqwest::Client,
@@ -159,6 +212,75 @@ async fn fetch_kinopoisk_candidates(
     })
 }
 
+#[tauri::command]
+async fn open_watch_window(
+    app: tauri::AppHandle,
+    url: String,
+    title: String,
+) -> Result<(), String> {
+    let trimmed_url = url.trim();
+    let parsed_url = Url::parse(trimmed_url)
+        .map_err(|_| "Некорректная ссылка для просмотра.".to_string())?;
+
+    match parsed_url.scheme() {
+        "http" | "https" => {}
+        _ => {
+            return Err("Разрешены только ссылки с протоколом http или https.".to_string());
+        }
+    }
+
+    #[cfg(desktop)]
+    let window_title = {
+        let trimmed_title = title.trim();
+        if trimmed_title.is_empty() {
+            "CineScope Player".to_string()
+        } else {
+            format!("CineScope — {}", trimmed_title)
+        }
+    };
+    #[cfg(not(desktop))]
+    let _ = title;
+
+    if let Some(existing_window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
+        existing_window
+            .navigate(parsed_url)
+            .map_err(|err| format!("Не удалось открыть ссылку в окне плеера: {}", err))?;
+
+        #[cfg(desktop)]
+        {
+            let _ = existing_window.set_title(window_title.as_str());
+            let _ = existing_window.unminimize();
+            let _ = existing_window.show();
+            let _ = existing_window.set_focus();
+        }
+
+        return Ok(());
+    }
+
+    let builder = WebviewWindowBuilder::new(
+        &app,
+        PLAYER_WINDOW_LABEL,
+        WebviewUrl::External(parsed_url),
+    )
+    .initialization_script(PLAYER_POPUP_BLOCK_SCRIPT);
+
+    #[cfg(desktop)]
+    let builder = builder
+        .title(window_title)
+        .inner_size(1280.0, 760.0)
+        .min_inner_size(800.0, 500.0)
+        .center()
+        .resizable(true)
+        .theme(Some(Theme::Dark))
+        .on_new_window(|_url, _features| NewWindowResponse::Deny);
+
+    builder
+        .build()
+        .map_err(|err| format!("Не удалось создать окно плеера: {}", err))?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let client = reqwest::Client::builder()
@@ -170,7 +292,10 @@ pub fn run() {
         .manage(HttpClientState { client })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![fetch_kinopoisk_candidates])
+        .invoke_handler(tauri::generate_handler![
+            fetch_kinopoisk_candidates,
+            open_watch_window
+        ])
         .run(tauri::generate_context!())
         .expect("error while running CineScope application");
 }

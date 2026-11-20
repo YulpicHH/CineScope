@@ -21,6 +21,7 @@ import { ErrorState } from '../components/ui/StateViews';
 import { useAppMode } from '../hooks/useAppMode';
 import { useLibrary } from '../hooks/useLibrary';
 import {
+  openWatchWindow,
   resolveWatchLink,
   type KinopoiskWatchResolution,
 } from '../services/kinopoisk';
@@ -64,6 +65,7 @@ export function TitleDetailsPage() {
   });
   const [watchRetryCount, setWatchRetryCount] = useState(0);
   const [missingKeyNotice, setMissingKeyNotice] = useState(false);
+  const [watchWindowError, setWatchWindowError] = useState<string | null>(null);
 
   const loadDetails = useCallback(async () => {
     if (!Number.isFinite(id) || id <= 0) {
@@ -99,6 +101,7 @@ export function TitleDetailsPage() {
     const { item } = details;
     setWatchState({ status: 'loading' });
     setMissingKeyNotice(false);
+    setWatchWindowError(null);
 
     void resolveWatchLink(
       {
@@ -292,29 +295,68 @@ export function TitleDetailsPage() {
             <div className="space-y-4 border-t border-white/10 pt-4">
               <div className="flex flex-wrap items-center gap-3">
                 {watchState.status === 'matched' ? (
-                  <a
-                    href={watchState.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    data-testid="watch-kinokino-link"
-                    onClick={(event) => {
-                      markWatching(item);
-                      if (isTauriRuntime()) {
-                        event.preventDefault();
-                        void openExternalUrl(watchState.url);
-                      }
-                    }}
-                    onAuxClick={(event) => {
-                      if (event.button === 1) {
+                  isTauriRuntime() ? (
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        data-testid="watch-kinokino-link"
+                        onClick={() => {
+                          setWatchWindowError(null);
+                          markWatching(item);
+                          void openWatchWindow(watchState.url, item.title).catch(
+                            (err: unknown) => {
+                              setWatchWindowError(
+                                typeof err === 'string'
+                                  ? err
+                                  : err instanceof Error
+                                    ? err.message
+                                    : 'Не удалось открыть встроенное окно плеера.',
+                              );
+                            },
+                          );
+                        }}
+                        className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
+                      >
+                        <Play className="h-4 w-4 fill-current" aria-hidden="true" />
+                        Смотреть
+                      </button>
+
+                      <button
+                        type="button"
+                        data-testid="watch-open-browser-button"
+                        title="Открыть в браузере"
+                        aria-label="Открыть в браузере"
+                        onClick={() => {
+                          setWatchWindowError(null);
+                          markWatching(item);
+                          void openExternalUrl(watchState.url);
+                        }}
+                        className="inline-flex h-[44px] w-[44px] items-center justify-center rounded-xl border border-white/20 bg-white/10 text-slate-200 transition-colors hover:bg-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
+                      >
+                        <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  ) : (
+                    <a
+                      href={watchState.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="watch-kinokino-link"
+                      onClick={() => {
                         markWatching(item);
-                      }
-                    }}
-                    className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
-                  >
-                    <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                    Смотреть
-                    <ExternalLink className="h-3.5 w-3.5 opacity-80" aria-hidden="true" />
-                  </a>
+                      }}
+                      onAuxClick={(event) => {
+                        if (event.button === 1) {
+                          markWatching(item);
+                        }
+                      }}
+                      className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
+                    >
+                      <Play className="h-4 w-4 fill-current" aria-hidden="true" />
+                      Смотреть
+                      <ExternalLink className="h-3.5 w-3.5 opacity-80" aria-hidden="true" />
+                    </a>
+                  )
                 ) : watchState.status === 'missing_key' ? (
                   <button
                     type="button"
@@ -377,6 +419,16 @@ export function TitleDetailsPage() {
                   {isFavorite ? 'В избранном' : 'В избранное'}
                 </button>
               </div>
+
+              {watchWindowError ? (
+                <p
+                  role="alert"
+                  data-testid="watch-window-error"
+                  className="text-xs text-rose-300"
+                >
+                  {watchWindowError}
+                </p>
+              ) : null}
 
               {missingKeyNotice && watchState.status === 'missing_key' ? (
                 <div

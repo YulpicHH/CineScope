@@ -432,3 +432,18 @@ export async function resolveWatchLink(
 
   return pending;
 }
+
+export async function openWatchWindow(url: string, title: string): Promise<void> {
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) return;
+
+  if (isTauriRuntime()) {
+    await invoke('open_watch_window', {
+      url: trimmedUrl,
+      title: title.trim(),
+    });
+    return;
+  }
+
+  window.open(trimmedUrl, '_blank', 'noopener,noreferrer');
+}

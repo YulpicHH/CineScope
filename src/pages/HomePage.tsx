@@ -186,11 +186,11 @@ export function HomePage() {
                 </button>
 
                 <Link
-                  to="/mood"
+                  to="/catalog?panel=mood"
                   className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-violet-400/30 bg-violet-500/20 px-4 py-2.5 text-sm font-medium text-violet-200 transition-colors hover:bg-violet-500/30"
                 >
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
-                  Подобрать по настроению
+                  Подобрать на вечер
                 </Link>
               </div>
             </div>

@@ -134,13 +134,18 @@ export interface MoodMatchResult {
 
 export type SortOption = 'popularity.desc' | 'vote_average.desc' | 'release_date.desc';
 
+export type CatalogMediaScope = 'all' | MediaType | 'anime';
+
 export interface CatalogFilters {
-  mediaType: MediaType;
+  mediaType: CatalogMediaScope;
   query: string;
+  moods: MoodId[];
   genreIds: number[];
+  country: string;
   year: string;
   minRating: number;
   sortBy: SortOption;
+  hideWatched: boolean;
 }
 
 export interface HistoryStats {

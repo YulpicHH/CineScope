@@ -22,9 +22,6 @@ const LibraryPage = lazy(() =>
 const HistoryPage = lazy(() =>
   import('./pages/HistoryPage').then((m) => ({ default: m.HistoryPage })),
 );
-const MoodPage = lazy(() =>
-  import('./pages/MoodPage').then((m) => ({ default: m.MoodPage })),
-);
 const ProfilePage = lazy(() =>
   import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 );
@@ -68,7 +65,7 @@ function AppRoutes() {
           <Route path="/title/:mediaType/:id" element={<TitleDetailsPage />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/history" element={<HistoryPage />} />
-          <Route path="/mood" element={<MoodPage />} />
+          <Route path="/mood" element={<Navigate to="/catalog?panel=mood" replace />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

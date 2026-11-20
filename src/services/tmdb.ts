@@ -7,17 +7,31 @@ import {
 import type {
   CastMember,
   CatalogFilters,
+  CatalogMediaScope,
   CrewMember,
   Genre,
   MediaItem,
   MediaType,
-  MoodId,
   Movie,
   Series,
   TitleDetailsData,
   VideoItem,
 } from '../types';
-import { filterDemoByMood, filterDemoCatalog } from '../utils/demoFilter';
+import {
+  ANIME_ORIGIN_COUNTRY,
+  buildCatalogSortComparator,
+  buildDiscoverGenreQuery,
+  getAnimeGenreList,
+  getAnimeMoodGenresForMediaType,
+  getMediaItemKey,
+  getUnifiedGenreList,
+  interleaveMediaStreams,
+  isAnimeItem,
+  itemMatchesCountry,
+  itemMatchesGenres,
+  itemMatchesMoods,
+} from '../utils/catalogHelpers';
+import { filterDemoCatalog } from '../utils/demoFilter';
 import { buildTmdbImageUrl, type TmdbImageSize } from '../utils/imageUrl';
 import { getMoodGenresForMediaType } from '../utils/moodMapping';
 
@@ -69,6 +83,7 @@ interface RawTmdbMedia {
   vote_count?: number;
   popularity?: number;
   origin_country?: string[];
+  original_language?: string;
   production_countries?: Array<{ iso_3166_1: string; name: string }>;
   runtime?: number | null;
   number_of_seasons?: number | null;
@@ -236,7 +251,16 @@ async function tmdbFetch<T>(
   return (await response.json()) as T;
 }
 
-export async function getGenresList(mediaType: MediaType, useDemo: boolean): Promise<Genre[]> {
+export async function getGenresList(
+  mediaType: CatalogMediaScope,
+  useDemo: boolean,
+): Promise<Genre[]> {
+  if (mediaType === 'all') {
+    return getUnifiedGenreList();
+  }
+  if (mediaType === 'anime') {
+    return getAnimeGenreList();
+  }
   if (useDemo || !hasTmdbKey()) {
     return mediaType === 'movie' ? MOVIE_GENRES : TV_GENRES;
   }
@@ -302,6 +326,97 @@ export interface PaginatedCatalogResult {
   totalResults: number;
 }
 
+async function fetchDiscoverForSingleType(
+  targetType: MediaType,
+  filters: CatalogFilters,
+  page: number,
+  signal?: AbortSignal,
+): Promise<{ items: MediaItem[]; totalPages: number; totalResults: number }> {
+  const isAnime = filters.mediaType === 'anime';
+  const moodConfig =
+    filters.moods.length > 0
+      ? isAnime
+        ? {
+            ...getAnimeMoodGenresForMediaType(filters.moods, targetType),
+            minVoteCount: filters.moods.includes('plot_twist') ? 300 : 80,
+          }
+        : getMoodGenresForMediaType(filters.moods, targetType)
+      : null;
+
+  const effectiveSort =
+    filters.sortBy === 'popularity.desc' &&
+    moodConfig?.sortBy === 'vote_average.desc'
+      ? 'vote_average.desc'
+      : filters.sortBy;
+
+  const sortBy =
+    targetType === 'tv' && effectiveSort === 'release_date.desc'
+      ? 'first_air_date.desc'
+      : effectiveSort;
+
+  const minVoteCount =
+    effectiveSort === 'vote_average.desc'
+      ? Math.max(isAnime ? 100 : 150, moodConfig?.minVoteCount ?? 150)
+      : Math.max(20, moodConfig ? 80 : 20);
+
+  const withGenres = buildDiscoverGenreQuery(
+    filters.genreIds,
+    filters.moods,
+    filters.mediaType,
+    targetType,
+  );
+
+  const originCountry = isAnime
+    ? ANIME_ORIGIN_COUNTRY
+    : filters.country || undefined;
+
+  const params: Record<string, string | number | undefined> = {
+    page,
+    sort_by: sortBy,
+    include_adult: 'false',
+    with_genres: withGenres,
+    with_origin_country: originCountry,
+    'vote_average.gte': filters.minRating > 0 ? filters.minRating : undefined,
+    'vote_count.gte': minVoteCount,
+  };
+
+  if (filters.year) {
+    if (targetType === 'movie') {
+      params.primary_release_year = filters.year;
+    } else {
+      params.first_air_date_year = filters.year;
+    }
+  }
+
+  const data = await tmdbFetch<TmdbListResponse>(
+    `/discover/${targetType}`,
+    params,
+    signal,
+  );
+
+  let normalized = data.results.map((r) => normalizeMediaItem(r, targetType));
+
+  // Уточняем выдачу по настроению, если выбрано несколько настроений в аниме или связка жанр + настроение
+  const needsClientMoodFilter =
+    filters.moods.length > 0 &&
+    (filters.genreIds.length > 0 || (isAnime && filters.moods.length > 1));
+
+  if (needsClientMoodFilter) {
+    const moodMatched = normalized.filter((item) =>
+      itemMatchesMoods(item, filters.moods, filters.mediaType),
+    );
+    if (moodMatched.length > 0) {
+      normalized = moodMatched;
+    }
+  }
+
+  return {
+    items: normalized,
+    totalPages: Math.min(data.total_pages, 500),
+    totalResults: data.total_results,
+  };
+}
+
 export async function fetchCatalogPage(
   filters: CatalogFilters,
   page: number,
@@ -319,110 +434,173 @@ export async function fetchCatalogPage(
   }
 
   const trimmedQuery = filters.query.trim();
+  const isDualStream =
+    filters.mediaType === 'all' || filters.mediaType === 'anime';
 
   if (trimmedQuery.length > 0) {
-    // Поиск по названию и параллельно по персонам (актёрам и режиссёрам)
-    const [titleRes, personRes] = await Promise.all([
-      tmdbFetch<TmdbListResponse>(
-        `/search/${filters.mediaType}`,
-        {
-          query: trimmedQuery,
-          page,
-          include_adult: 'false',
-        },
-        signal,
-      ),
+    const searchMovie = isDualStream || filters.mediaType === 'movie';
+    const searchTv = isDualStream || filters.mediaType === 'tv';
+
+    const emptyList: TmdbListResponse = {
+      page,
+      total_pages: 1,
+      total_results: 0,
+      results: [],
+    };
+
+    const [movieRes, tvRes, personRes] = await Promise.all([
+      searchMovie
+        ? tmdbFetch<TmdbListResponse>(
+            '/search/movie',
+            { query: trimmedQuery, page, include_adult: 'false' },
+            signal,
+          )
+        : Promise.resolve(emptyList),
+      searchTv
+        ? tmdbFetch<TmdbListResponse>(
+            '/search/tv',
+            { query: trimmedQuery, page, include_adult: 'false' },
+            signal,
+          )
+        : Promise.resolve(emptyList),
       page === 1
         ? tmdbFetch<TmdbPersonSearchResponse>(
             '/search/person',
-            {
-              query: trimmedQuery,
-              page: 1,
-              include_adult: 'false',
-            },
+            { query: trimmedQuery, page: 1, include_adult: 'false' },
             signal,
           ).catch(() => ({ results: [] }))
         : Promise.resolve({ results: [] }),
     ]);
 
-    const seenIds = new Set<number>();
-    const combined: MediaItem[] = [];
+    const seenKeys = new Set<string>();
+    const combined: Array<{ item: MediaItem; originalLanguage?: string }> = [];
 
-    for (const raw of titleRes.results) {
-      if (!seenIds.has(raw.id)) {
-        seenIds.add(raw.id);
-        combined.push(normalizeMediaItem(raw, filters.mediaType));
-      }
+    const pushRaw = (raw: RawTmdbMedia, forcedType: MediaType) => {
+      const key = `${forcedType}:${raw.id}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      combined.push({
+        item: normalizeMediaItem(raw, forcedType),
+        originalLanguage: raw.original_language,
+      });
+    };
+
+    for (const raw of movieRes.results) {
+      pushRaw(raw, 'movie');
+    }
+    for (const raw of tvRes.results) {
+      pushRaw(raw, 'tv');
     }
 
-    // Добавляем известные работы найденных актёров и режиссёров нужного типа
     for (const person of personRes.results.slice(0, 5)) {
       for (const work of person.known_for ?? []) {
         const workType: MediaType = work.media_type === 'tv' ? 'tv' : 'movie';
-        if (workType === filters.mediaType && !seenIds.has(work.id)) {
-          seenIds.add(work.id);
-          combined.push(normalizeMediaItem(work, filters.mediaType));
+        if (isDualStream || workType === filters.mediaType) {
+          pushRaw(work, workType);
         }
       }
     }
 
-    // Применяем клиентские фильтры поверх результатов поиска, чтобы фильтры работали совместно с поиском
     const filtered = combined
-      .filter((item) =>
-        filters.genreIds.length === 0
-          ? true
-          : filters.genreIds.every((gid) => item.genreIds.includes(gid)),
+      .filter(({ item, originalLanguage }) =>
+        filters.mediaType === 'anime'
+          ? isAnimeItem(item, originalLanguage)
+          : true,
       )
-      .filter((item) => (filters.year ? item.year === filters.year : true))
-      .filter((item) => (filters.minRating > 0 ? item.voteAverage >= filters.minRating : true))
-      .sort((a, b) => {
-        if (filters.sortBy === 'vote_average.desc') return b.voteAverage - a.voteAverage;
-        if (filters.sortBy === 'release_date.desc') return b.releaseDate.localeCompare(a.releaseDate);
-        return b.popularity - a.popularity;
-      });
+      .filter(({ item }) =>
+        itemMatchesGenres(item, filters.genreIds, filters.mediaType),
+      )
+      .filter(({ item }) =>
+        itemMatchesMoods(item, filters.moods, filters.mediaType),
+      )
+      .filter(({ item, originalLanguage }) =>
+        filters.mediaType === 'anime'
+          ? true
+          : itemMatchesCountry(item, filters.country, originalLanguage),
+      )
+      .filter(({ item }) => (filters.year ? item.year === filters.year : true))
+      .filter(({ item }) =>
+        filters.minRating > 0 ? item.voteAverage >= filters.minRating : true,
+      )
+      .map(({ item }) => item)
+      .sort(buildCatalogSortComparator(filters.sortBy));
+
+    const maxPages = Math.max(
+      searchMovie ? movieRes.total_pages : 1,
+      searchTv ? tvRes.total_pages : 1,
+    );
 
     return {
       items: filtered,
-      page: titleRes.page,
-      totalPages: titleRes.total_pages,
+      page,
+      totalPages: Math.min(maxPages, 500),
       totalResults: filtered.length,
     };
   }
 
-  // Обычный discover с одновременными фильтрами
-  const sortBy =
-    filters.mediaType === 'tv' && filters.sortBy === 'release_date.desc'
-      ? 'first_air_date.desc'
-      : filters.sortBy;
+  // Режим discover: объединённый поток («Все» или «Аниме»)
+  if (filters.mediaType === 'all' || filters.mediaType === 'anime') {
+    const [movieSettled, tvSettled] = await Promise.allSettled([
+      fetchDiscoverForSingleType('movie', filters, page, signal),
+      fetchDiscoverForSingleType('tv', filters, page, signal),
+    ]);
 
-  const params: Record<string, string | number | undefined> = {
-    page,
-    sort_by: sortBy,
-    include_adult: 'false',
-    with_genres: filters.genreIds.length > 0 ? filters.genreIds.join(',') : undefined,
-    'vote_average.gte': filters.minRating > 0 ? filters.minRating : undefined,
-    'vote_count.gte': filters.sortBy === 'vote_average.desc' ? 150 : 20,
-  };
-
-  if (filters.year) {
-    if (filters.mediaType === 'movie') {
-      params.primary_release_year = filters.year;
-    } else {
-      params.first_air_date_year = filters.year;
+    if (
+      movieSettled.status === 'rejected' &&
+      tvSettled.status === 'rejected'
+    ) {
+      throw movieSettled.reason;
     }
+
+    const movieRes =
+      movieSettled.status === 'fulfilled'
+        ? movieSettled.value
+        : { items: [] as MediaItem[], totalPages: 1, totalResults: 0 };
+    const tvRes =
+      tvSettled.status === 'fulfilled'
+        ? tvSettled.value
+        : { items: [] as MediaItem[], totalPages: 1, totalResults: 0 };
+
+    let merged: MediaItem[];
+    if (filters.sortBy === 'popularity.desc') {
+      // В «Аниме» начинаем чередование с сериалов, в «Все» — с фильмов
+      merged =
+        filters.mediaType === 'anime'
+          ? interleaveMediaStreams(tvRes.items, movieRes.items)
+          : interleaveMediaStreams(movieRes.items, tvRes.items);
+    } else {
+      const seenKeys = new Set<string>();
+      merged = [];
+      for (const item of [...movieRes.items, ...tvRes.items]) {
+        const key = getMediaItemKey(item);
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          merged.push(item);
+        }
+      }
+      merged.sort(buildCatalogSortComparator(filters.sortBy));
+    }
+
+    return {
+      items: merged,
+      page,
+      totalPages: Math.max(movieRes.totalPages, tvRes.totalPages, 1),
+      totalResults: movieRes.totalResults + tvRes.totalResults,
+    };
   }
 
-  const data = await tmdbFetch<TmdbListResponse>(
-    `/discover/${filters.mediaType}`,
-    params,
+  const single = await fetchDiscoverForSingleType(
+    filters.mediaType,
+    filters,
+    page,
     signal,
   );
 
   return {
-    items: data.results.map((r) => normalizeMediaItem(r, filters.mediaType)),
-    page: data.page,
-    totalPages: Math.min(data.total_pages, 500),
-    totalResults: data.total_results,
+    items: single.items,
+    page,
+    totalPages: single.totalPages,
+    totalResults: single.totalResults,
   };
 }
 
@@ -571,70 +749,20 @@ export async function getTitleDetails(
   };
 }
 
-export async function getMoodDiscoverCandidates(params: {
-  mediaType: MediaType;
-  moods: MoodId[];
-  genreId: number | null;
-  minRating: number;
-  year: string;
-  country: string;
-  useDemo: boolean;
-}): Promise<MediaItem[]> {
-  if (params.useDemo || !hasTmdbKey()) {
-    return filterDemoByMood(params);
+export async function fetchRandomCatalogCandidates(
+  filters: CatalogFilters,
+  totalPages: number,
+  useDemo: boolean,
+  signal?: AbortSignal,
+): Promise<MediaItem[]> {
+  if (useDemo || !hasTmdbKey()) {
+    return filterDemoCatalog(filters);
   }
-
-  const moodConfig = getMoodGenresForMediaType(params.moods, params.mediaType);
-  const genreIds = new Set<number>(moodConfig.genreIds);
-  if (params.genreId) {
-    genreIds.add(params.genreId);
-  }
-
-  // Для TMDB discover используем OR (|), чтобы комбинация нескольких настроений давала богатый выбор кандидатов
-  const withGenresParam =
-    params.genreId && moodConfig.genreIds.length > 0
-      ? `${params.genreId}`
-      : genreIds.size > 0
-        ? Array.from(genreIds).join('|')
-        : undefined;
-
-  const queryParams: Record<string, string | number | undefined> = {
-    sort_by: moodConfig.sortBy,
-    with_genres: withGenresParam,
-    'vote_average.gte': params.minRating > 0 ? params.minRating : undefined,
-    'vote_count.gte': moodConfig.minVoteCount,
-    with_origin_country: params.country || undefined,
-    include_adult: 'false',
-    page: 1,
-  };
-
-  if (params.year) {
-    if (params.mediaType === 'movie') {
-      queryParams.primary_release_year = params.year;
-    } else {
-      queryParams.first_air_date_year = params.year;
-    }
-  }
-
-  const [page1, page2] = await Promise.all([
-    tmdbFetch<TmdbListResponse>(`/discover/${params.mediaType}`, queryParams),
-    tmdbFetch<TmdbListResponse>(`/discover/${params.mediaType}`, {
-      ...queryParams,
-      page: 2,
-    }).catch(() => ({ results: [] as RawTmdbMedia[] })),
-  ]);
-
-  const seen = new Set<number>();
-  const combined: MediaItem[] = [];
-  for (const raw of [...page1.results, ...page2.results]) {
-    if (!seen.has(raw.id)) {
-      seen.add(raw.id);
-      combined.push(normalizeMediaItem(raw, params.mediaType));
-    }
-    if (combined.length >= 30) break;
-  }
-
-  return combined;
+  const maxPage = Math.max(1, Math.min(totalPages, 15));
+  const randomPage =
+    maxPage > 1 ? Math.floor(Math.random() * (maxPage - 1)) + 2 : 1;
+  const result = await fetchCatalogPage(filters, randomPage, false, signal);
+  return result.items;
 }
 
 export async function getRecommendedForUser(params: {

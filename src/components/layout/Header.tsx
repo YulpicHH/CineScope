@@ -4,7 +4,6 @@ import { User } from 'lucide-react';
 const NAV_ITEMS = [
   { to: '/', label: 'Главная', end: true },
   { to: '/catalog', label: 'Каталог', end: false },
-  { to: '/mood', label: 'По настроению', end: false },
   { to: '/library', label: 'Коллекция', end: false },
   { to: '/history', label: 'История', end: false },
 ];

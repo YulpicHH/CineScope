@@ -37,8 +37,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <p>CineScope — персональный каталог фильмов и сериалов</p>
           <div className="flex items-center gap-6">
-            <Link to="/mood" className="hover:text-slate-900 dark:hover:text-white">
-              Подбор по настроению
+            <Link to="/catalog" className="hover:text-slate-900 dark:hover:text-white">
+              Каталог и подбор
             </Link>
             <Link to="/library" className="hover:text-slate-900 dark:hover:text-white">
               Моя коллекция

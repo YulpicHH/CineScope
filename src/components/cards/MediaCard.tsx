@@ -8,9 +8,14 @@ import { PosterArtwork } from '../ui/PosterArtwork';
 interface MediaCardProps {
   item: MediaItem;
   compact?: boolean;
+  showMediaType?: boolean;
 }
 
-export const MediaCard = memo(function MediaCard({ item, compact = false }: MediaCardProps) {
+export const MediaCard = memo(function MediaCard({
+  item,
+  compact = false,
+  showMediaType = false,
+}: MediaCardProps) {
   const { getEntry, toggleWatchlist, toggleFavorite } = useLibrary();
   const entry = getEntry(item.id, item.mediaType);
 
@@ -111,10 +116,16 @@ export const MediaCard = memo(function MediaCard({ item, compact = false }: Medi
 
         {/* Метаданные без капсул/плашек: чистый текст с разделителями */}
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500 dark:text-slate-400">
+          {showMediaType ? (
+            <span>{item.mediaType === 'tv' ? 'Сериал' : 'Фильм'}</span>
+          ) : null}
+          {showMediaType && item.year ? <span aria-hidden="true">·</span> : null}
           {item.year ? <span className="tabular-nums">{item.year}</span> : null}
-          {item.year && primaryGenre ? <span aria-hidden="true">·</span> : null}
+          {(showMediaType || item.year) && primaryGenre ? <span aria-hidden="true">·</span> : null}
           {primaryGenre ? <span className="truncate max-w-[110px]">{primaryGenre}</span> : null}
-          {(item.year || primaryGenre) && ratingText ? <span aria-hidden="true">·</span> : null}
+          {(showMediaType || item.year || primaryGenre) && ratingText ? (
+            <span aria-hidden="true">·</span>
+          ) : null}
           {ratingText ? (
             <span className="inline-flex items-center gap-1 tabular-nums text-slate-700 dark:text-slate-300">
               <Star className="h-3 w-3 fill-amber-400 text-amber-400" aria-hidden="true" />

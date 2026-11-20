@@ -258,7 +258,7 @@ export function LibraryPage() {
                 Перейти в каталог
               </Link>
               <Link
-                to="/mood"
+                to="/catalog?panel=mood"
                 className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/10"
               >
                 Подобрать по настроению

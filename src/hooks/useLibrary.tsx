@@ -16,6 +16,7 @@ import {
   LIBRARY_STORAGE_KEY,
   parseLibraryStorage,
   removeWatchedHistoryEntry,
+  removeWatchingEntry,
   serializeLibraryState,
   setTitleRating,
   toggleFavoriteItem,
@@ -33,12 +34,15 @@ interface ToastContextValue {
 
 interface LibraryContextValue {
   items: LibraryItem[];
+  watchingItems: LibraryItem[];
   watchlistItems: LibraryItem[];
   watchedItems: LibraryItem[];
   favoriteItems: LibraryItem[];
   recommendationProfile: ReturnType<typeof buildRecommendationProfile>;
   getEntry: (id: number, mediaType: MediaType) => LibraryItem | undefined;
   setStatus: (media: MediaItem, nextStatus: LibraryStatus | null) => void;
+  markWatching: (media: MediaItem) => void;
+  removeFromWatching: (media: MediaItem) => void;
   toggleWatchlist: (media: MediaItem) => void;
   markWatched: (media: MediaItem) => void;
   toggleFavorite: (media: MediaItem) => void;
@@ -103,9 +107,37 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         ...prev,
         items: applyTitleStatus(prev.items, media, nextStatus),
       }));
-      if (nextStatus === 'watchlist') showToast(`«${media.title}» добавлен в «Посмотреть позже»`);
+      if (nextStatus === 'watching') showToast(`«${media.title}» добавлен в «В процессе»`);
+      else if (nextStatus === 'watchlist') showToast(`«${media.title}» добавлен в «Посмотреть позже»`);
       else if (nextStatus === 'watched') showToast(`«${media.title}» отмечен как просмотренный`);
       else showToast(`Статус для «${media.title}» снят`);
+    },
+    [showToast],
+  );
+
+  const markWatching = useCallback(
+    (media: MediaItem) => {
+      const existing = itemsRef.current.find(
+        (item) => item.id === media.id && item.mediaType === media.mediaType,
+      );
+      setState((prev) => ({
+        ...prev,
+        items: applyTitleStatus(prev.items, media, 'watching'),
+      }));
+      if (existing?.status !== 'watching') {
+        showToast(`«${media.title}» добавлен в «В процессе»`);
+      }
+    },
+    [showToast],
+  );
+
+  const removeFromWatching = useCallback(
+    (media: MediaItem) => {
+      setState((prev) => ({
+        ...prev,
+        items: removeWatchingEntry(prev.items, media.id, media.mediaType),
+      }));
+      showToast(`«${media.title}» убран из «В процессе»`);
     },
     [showToast],
   );
@@ -185,6 +217,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     showToast('Локальная библиотека и история очищены');
   }, [showToast]);
 
+  const watchingItems = useMemo(
+    () => state.items.filter((i) => i.status === 'watching'),
+    [state.items],
+  );
   const watchlistItems = useMemo(
     () => state.items.filter((i) => i.status === 'watchlist'),
     [state.items],
@@ -206,12 +242,15 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const libraryValue = useMemo<LibraryContextValue>(
     () => ({
       items: state.items,
+      watchingItems,
       watchlistItems,
       watchedItems,
       favoriteItems,
       recommendationProfile,
       getEntry,
       setStatus,
+      markWatching,
+      removeFromWatching,
       toggleWatchlist,
       markWatched,
       toggleFavorite,
@@ -221,12 +260,15 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     }),
     [
       state.items,
+      watchingItems,
       watchlistItems,
       watchedItems,
       favoriteItems,
       recommendationProfile,
       getEntry,
       setStatus,
+      markWatching,
+      removeFromWatching,
       toggleWatchlist,
       markWatched,
       toggleFavorite,

@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Link } from 'react-router-dom';
-import { Bookmark, Check, Heart, Star } from 'lucide-react';
+import { Bookmark, Check, Heart, Star, Trash2 } from 'lucide-react';
 import { useLibrary } from '../../hooks/useLibrary';
 import type { MediaItem } from '../../types';
 import { PosterArtwork } from '../ui/PosterArtwork';
@@ -9,12 +9,16 @@ interface MediaCardProps {
   item: MediaItem;
   compact?: boolean;
   showMediaType?: boolean;
+  onRemove?: (item: MediaItem) => void;
+  removeLabel?: string;
 }
 
 export const MediaCard = memo(function MediaCard({
   item,
   compact = false,
   showMediaType = false,
+  onRemove,
+  removeLabel,
 }: MediaCardProps) {
   const { getEntry, toggleWatchlist, toggleFavorite } = useLibrary();
   const entry = getEntry(item.id, item.mediaType);
@@ -103,6 +107,26 @@ export const MediaCard = memo(function MediaCard({
               aria-hidden="true"
             />
           </button>
+
+          {onRemove ? (
+            <button
+              type="button"
+              data-testid="card-remove-button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove(item);
+              }}
+              aria-label={
+                removeLabel
+                  ? `${removeLabel}: ${item.title}`
+                  : `Удалить «${item.title}»`
+              }
+              title={removeLabel ?? 'Удалить'}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/20 bg-black/75 text-white transition-colors hover:border-rose-400/60 hover:bg-rose-600 focus-visible:outline-2 focus-visible:outline-rose-500"
+            >
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       </div>
 

@@ -8,6 +8,7 @@ import {
   List,
   Search,
   Star,
+  Trash2,
 } from 'lucide-react';
 import { MediaGrid } from '../components/cards/MediaGrid';
 import { PosterArtwork } from '../components/ui/PosterArtwork';
@@ -15,7 +16,7 @@ import { EmptyState } from '../components/ui/StateViews';
 import { useLibrary } from '../hooks/useLibrary';
 import type { Genre, LibraryItem, MediaItem } from '../types';
 
-type LibraryTab = 'watchlist' | 'watched' | 'favorites';
+type LibraryTab = 'watching' | 'watchlist' | 'watched' | 'favorites';
 
 function libraryItemToMediaItem(item: LibraryItem): MediaItem {
   if (item.mediaType === 'movie') {
@@ -64,25 +65,30 @@ function libraryItemToMediaItem(item: LibraryItem): MediaItem {
 
 export function LibraryPage() {
   const {
+    watchingItems,
     watchlistItems,
     watchedItems,
     favoriteItems,
+    removeFromWatching,
     toggleWatchlist,
     markWatched,
     toggleFavorite,
     rateTitle,
   } = useLibrary();
 
-  const [activeTab, setActiveTab] = useState<LibraryTab>('watchlist');
+  const [activeTab, setActiveTab] = useState<LibraryTab>(() =>
+    watchingItems.length > 0 ? 'watching' : 'watchlist',
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGenreId, setSelectedGenreId] = useState<number | ''>('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const currentItems = useMemo(() => {
+    if (activeTab === 'watching') return watchingItems;
     if (activeTab === 'watchlist') return watchlistItems;
     if (activeTab === 'watched') return watchedItems;
     return favoriteItems;
-  }, [activeTab, watchlistItems, watchedItems, favoriteItems]);
+  }, [activeTab, watchingItems, watchlistItems, watchedItems, favoriteItems]);
 
   const availableGenres = useMemo(() => {
     const map = new Map<number, Genre>();
@@ -113,6 +119,7 @@ export function LibraryPage() {
   }, [currentItems, searchQuery, selectedGenreId]);
 
   const tabs: Array<{ id: LibraryTab; label: string; count: number }> = [
+    { id: 'watching', label: 'В процессе', count: watchingItems.length },
     { id: 'watchlist', label: 'Посмотреть позже', count: watchlistItems.length },
     { id: 'watched', label: 'Просмотрено', count: watchedItems.length },
     { id: 'favorites', label: 'Избранное', count: favoriteItems.length },
@@ -125,7 +132,7 @@ export function LibraryPage() {
           Моя коллекция
         </h1>
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Управляйте списками просмотра. Тайтл может находиться либо в «Посмотреть позже», либо в «Просмотрено», и дополнительно в «Избранном».
+          Управляйте списками просмотра. Тайтл может находиться в «В процессе», «Посмотреть позже» или «Просмотрено», и дополнительно в «Избранном».
         </p>
       </div>
 
@@ -246,7 +253,9 @@ export function LibraryPage() {
           title="В этом списке пока пусто"
           description={
             currentItems.length === 0
-              ? 'Добавляйте фильмы и сериалы из каталога или подбора по настроению.'
+              ? activeTab === 'watching'
+                ? 'Нажмите «Смотреть» на странице фильма или сериала, чтобы он автоматически появился во вкладке «В процессе».'
+                : 'Добавляйте фильмы и сериалы из каталога или подбора по настроению.'
               : 'По вашему поисковому запросу или фильтру жанра ничего не найдено.'
           }
           action={
@@ -267,7 +276,11 @@ export function LibraryPage() {
           }
         />
       ) : viewMode === 'grid' ? (
-        <MediaGrid items={filteredItems.map(libraryItemToMediaItem)} />
+        <MediaGrid
+          items={filteredItems.map(libraryItemToMediaItem)}
+          onRemove={activeTab === 'watching' ? removeFromWatching : undefined}
+          removeLabel="Удалить из «В процессе»"
+        />
       ) : (
         <div className="divide-y divide-slate-200 overflow-hidden rounded-2xl border border-slate-200 bg-white dark:divide-white/[0.06] dark:border-white/[0.08] dark:bg-[#11151E]">
           {filteredItems.map((entry) => {
@@ -392,6 +405,18 @@ export function LibraryPage() {
                       aria-hidden="true"
                     />
                   </button>
+
+                  {activeTab === 'watching' ? (
+                    <button
+                      type="button"
+                      onClick={() => removeFromWatching(mediaItem)}
+                      aria-label={`Удалить «${entry.title}» из «В процессе»`}
+                      title="Удалить из «В процессе»"
+                      className="inline-flex items-center justify-center rounded-lg border border-slate-200 p-2 text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 dark:border-white/10 dark:text-slate-400 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  ) : null}
                 </div>
               </div>
             );

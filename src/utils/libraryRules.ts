@@ -25,7 +25,12 @@ function isValidLibraryItem(value: unknown): value is LibraryItem {
   if (typeof value.id !== 'number') return false;
   if (value.mediaType !== 'movie' && value.mediaType !== 'tv') return false;
   if (typeof value.title !== 'string') return false;
-  if (value.status !== null && value.status !== 'watchlist' && value.status !== 'watched') {
+  if (
+    value.status !== null &&
+    value.status !== 'watching' &&
+    value.status !== 'watchlist' &&
+    value.status !== 'watched'
+  ) {
     return false;
   }
   if (typeof value.isFavorite !== 'boolean') return false;
@@ -97,7 +102,7 @@ function mediaToLibraryBase(media: MediaItem, nowIso: string): LibraryItem {
 }
 
 /**
- * Устанавливает или снимает статус «Посмотреть позже» / «Просмотрено».
+ * Устанавливает или снимает статус «В процессе» / «Посмотреть позже» / «Просмотрено».
  * Правило: тайтл может быть только в одном из этих статусов,
  * но дополнительно может оставаться в «Избранном».
  */
@@ -126,6 +131,10 @@ export function applyTitleStatus(
   if (nextStatus === 'watched') {
     base.status = 'watched';
     base.watchedAt = existing?.status === 'watched' && existing.watchedAt ? existing.watchedAt : nowIso;
+  } else if (nextStatus === 'watching') {
+    base.status = 'watching';
+    base.watchedAt = null;
+    base.userRating = null;
   } else if (nextStatus === 'watchlist') {
     base.status = 'watchlist';
     base.watchedAt = null;
@@ -205,6 +214,28 @@ export function removeWatchedHistoryEntry(
           status: null,
           watchedAt: null,
           userRating: null,
+          updatedAt: nowIso,
+        };
+      }
+      return null;
+    })
+    .filter((item): item is LibraryItem => item !== null);
+}
+
+export function removeWatchingEntry(
+  items: LibraryItem[],
+  id: number,
+  mediaType: MediaItem['mediaType'],
+  nowIso: string = new Date().toISOString(),
+): LibraryItem[] {
+  return items
+    .map((item) => {
+      if (item.id !== id || item.mediaType !== mediaType) return item;
+      if (item.status !== 'watching') return item;
+      if (item.isFavorite) {
+        return {
+          ...item,
+          status: null,
           updatedAt: nowIso,
         };
       }

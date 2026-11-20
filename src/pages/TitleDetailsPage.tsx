@@ -46,8 +46,14 @@ export function TitleDetailsPage() {
   const id = Number(rawId);
 
   const { isDemoMode } = useAppMode();
-  const { getEntry, toggleWatchlist, markWatched, toggleFavorite, rateTitle } =
-    useLibrary();
+  const {
+    getEntry,
+    markWatching,
+    toggleWatchlist,
+    markWatched,
+    toggleFavorite,
+    rateTitle,
+  } = useLibrary();
 
   const [details, setDetails] = useState<TitleDetailsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -289,9 +295,15 @@ export function TitleDetailsPage() {
                     rel="noopener noreferrer"
                     data-testid="watch-kinokino-link"
                     onClick={(event) => {
+                      markWatching(item);
                       if (isTauriRuntime()) {
                         event.preventDefault();
                         void openExternalUrl(watchState.url);
+                      }
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button === 1) {
+                        markWatching(item);
                       }
                     }}
                     className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"

@@ -7,6 +7,8 @@ import {
   LIBRARY_SCHEMA_VERSION,
   parseLibraryStorage,
   removeWatchedHistoryEntry,
+  removeWatchingEntry,
+  serializeLibraryState,
   setTitleRating,
   toggleFavoriteItem,
 } from './libraryRules';
@@ -127,4 +129,37 @@ test('parseLibraryStorage handles corrupted JSON and wrong schema versions safel
     version: LIBRARY_SCHEMA_VERSION,
     items: [],
   });
+});
+
+test('watching status transitions cleanly, persists in storage, and removes while preserving favorite', () => {
+  let items = applyTitleStatus([], sampleMovie, 'watching', '2026-10-05T19:00:00.000Z');
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, 'watching');
+  assert.equal(items[0].watchedAt, null);
+  assert.equal(items[0].userRating, null);
+
+  // Сохранение и чтение из localStorage сохраняет статус 'watching'
+  const raw = serializeLibraryState({ version: LIBRARY_SCHEMA_VERSION, items });
+  const parsed = parseLibraryStorage(raw);
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.items[0].status, 'watching');
+
+  // Удаление из «В процессе» полностью удаляет запись, если она не в избранном
+  const afterDelete = removeWatchingEntry(items, sampleMovie.id, 'movie');
+  assert.equal(afterDelete.length, 0);
+
+  // Если тайтл в избранном — удаление из «В процессе» снимает только статус
+  items = toggleFavoriteItem(items, sampleMovie, '2026-10-05T19:05:00.000Z');
+  items = removeWatchingEntry(items, sampleMovie.id, 'movie', '2026-10-05T19:10:00.000Z');
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, null);
+  assert.equal(items[0].isFavorite, true);
+
+  // Повторный переход в «В процессе» после «Просмотрено» сбрасывает оценку и дату просмотра
+  items = setTitleRating(items, sampleMovie, 8, '2026-10-06T20:00:00.000Z');
+  items = applyTitleStatus(items, sampleMovie, 'watching', '2026-10-07T21:00:00.000Z');
+  assert.equal(items[0].status, 'watching');
+  assert.equal(items[0].watchedAt, null);
+  assert.equal(items[0].userRating, null);
+  assert.equal(items[0].isFavorite, true);
 });

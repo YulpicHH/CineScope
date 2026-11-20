@@ -79,7 +79,7 @@ export interface Person {
   knownFor: MediaItem[];
 }
 
-export type LibraryStatus = 'watchlist' | 'watched';
+export type LibraryStatus = 'watching' | 'watchlist' | 'watched';
 
 export interface LibraryItem {
   id: number;

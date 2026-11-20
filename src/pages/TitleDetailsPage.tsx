@@ -4,9 +4,7 @@ import {
   ArrowLeft,
   Bookmark,
   Check,
-  Download,
   ExternalLink,
-  HardDrive,
   Heart,
   KeyRound,
   Loader2,
@@ -17,13 +15,11 @@ import {
   User as UserIcon,
 } from 'lucide-react';
 import { MediaCarousel } from '../components/cards/MediaCarousel';
-import { OfflineMediaModal } from '../components/offline/OfflineMediaModal';
 import { BackdropArtwork, PosterArtwork } from '../components/ui/PosterArtwork';
 import { DetailsSkeleton } from '../components/ui/Skeleton';
 import { ErrorState } from '../components/ui/StateViews';
 import { useAppMode } from '../hooks/useAppMode';
 import { useLibrary } from '../hooks/useLibrary';
-import { useOfflineDownloads } from '../hooks/useOfflineDownloads';
 import {
   openWatchWindow,
   resolveWatchLink,
@@ -37,7 +33,6 @@ import {
   formatVoteCount,
 } from '../utils/formatters';
 import { buildProfileImageProps } from '../utils/imageUrl';
-import { formatFileSize } from '../utils/offlineDownloadsRules';
 import { isTauriRuntime, openExternalUrl } from '../utils/platform';
 
 type WatchResolutionState =
@@ -62,12 +57,6 @@ export function TitleDetailsPage() {
     rateTitle,
   } = useLibrary();
 
-  const {
-    getOfflineItemForTitle,
-    getActiveDownloadForTitle,
-    playOfflineItem,
-  } = useOfflineDownloads();
-
   const [details, setDetails] = useState<TitleDetailsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,8 +66,6 @@ export function TitleDetailsPage() {
   const [watchRetryCount, setWatchRetryCount] = useState(0);
   const [missingKeyNotice, setMissingKeyNotice] = useState(false);
   const [watchWindowError, setWatchWindowError] = useState<string | null>(null);
-  const [offlineModalOpen, setOfflineModalOpen] = useState(false);
-  const [offlineError, setOfflineError] = useState<string | null>(null);
 
   const loadDetails = useCallback(async () => {
     if (!Number.isFinite(id) || id <= 0) {
@@ -164,8 +151,6 @@ export function TitleDetailsPage() {
   const isWatched = entry?.status === 'watched';
   const isFavorite = Boolean(entry?.isFavorite);
   const userRating = entry?.userRating ?? null;
-  const offlineItem = getOfflineItemForTitle(item.id, item.mediaType);
-  const activeOfflineDownload = getActiveDownloadForTitle(item.id, item.mediaType);
 
   const trailer = videos[0] ?? null;
 
@@ -384,76 +369,6 @@ export function TitleDetailsPage() {
                   </button>
                 ) : null}
 
-                {offlineItem ? (
-                  <div className="inline-flex items-center gap-2">
-                    <button
-                      type="button"
-                      data-testid="watch-offline-button"
-                      onClick={() => {
-                        setOfflineError(null);
-                        markWatching(item);
-                        void playOfflineItem(offlineItem).catch((err: unknown) => {
-                          setOfflineError(
-                            err instanceof Error
-                              ? err.message
-                              : typeof err === 'string'
-                                ? err
-                                : 'Не удалось открыть офлайн-видео.',
-                          );
-                        });
-                      }}
-                      className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition-colors hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
-                    >
-                      <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                      Смотреть офлайн
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="manage-offline-button"
-                      title="Управление офлайн-копией"
-                      aria-label="Управление офлайн-копией"
-                      onClick={() => {
-                        setOfflineError(null);
-                        setOfflineModalOpen(true);
-                      }}
-                      className="inline-flex h-[44px] w-[44px] items-center justify-center rounded-xl border border-emerald-400/35 bg-emerald-500/15 text-emerald-200 transition-colors hover:bg-emerald-500/25 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
-                    >
-                      <HardDrive className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                  </div>
-                ) : activeOfflineDownload ? (
-                  <button
-                    type="button"
-                    data-testid="offline-progress-button"
-                    onClick={() => {
-                      setOfflineError(null);
-                      setOfflineModalOpen(true);
-                    }}
-                    className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-blue-400/40 bg-blue-500/20 px-4 py-2.5 text-sm font-semibold text-blue-100 transition-colors hover:bg-blue-500/30"
-                  >
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    <span className="tabular-nums">
-                      Загрузка{' '}
-                      {activeOfflineDownload.progressPercent !== null
-                        ? `${activeOfflineDownload.progressPercent}%`
-                        : formatFileSize(activeOfflineDownload.downloadedBytes)}
-                    </span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    data-testid="open-offline-modal-button"
-                    onClick={() => {
-                      setOfflineError(null);
-                      setOfflineModalOpen(true);
-                    }}
-                    className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
-                  >
-                    <Download className="h-4 w-4" aria-hidden="true" />
-                    Офлайн
-                  </button>
-                )}
-
                 <button
                   type="button"
                   onClick={() => toggleWatchlist(item)}
@@ -512,16 +427,6 @@ export function TitleDetailsPage() {
                   className="text-xs text-rose-300"
                 >
                   {watchWindowError}
-                </p>
-              ) : null}
-
-              {offlineError ? (
-                <p
-                  role="alert"
-                  data-testid="offline-playback-error"
-                  className="text-xs text-rose-300"
-                >
-                  {offlineError}
                 </p>
               ) : null}
 
@@ -709,22 +614,6 @@ export function TitleDetailsPage() {
       {similar.length > 0 ? (
         <MediaCarousel title="Похожие тайтлы" items={similar} />
       ) : null}
-
-      <OfflineMediaModal
-        isOpen={offlineModalOpen}
-        onClose={() => setOfflineModalOpen(false)}
-        media={{
-          tmdbId: item.id,
-          mediaType: item.mediaType,
-          title: item.title,
-          originalTitle: item.originalTitle,
-          year: item.year,
-          posterPath: item.posterPath,
-          genres: item.genres,
-          voteAverage: item.voteAverage,
-        }}
-        existingItem={offlineItem ?? null}
-      />
     </div>
   );
 }

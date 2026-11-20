@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -181,6 +182,7 @@ async function startServer() {
   await ensureKinopoiskCacheLoaded();
 
   const app = express();
+  const httpServer = http.createServer(app);
   const port = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '1mb' }));
@@ -357,7 +359,10 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ws: { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -369,7 +374,7 @@ async function startServer() {
     });
   }
 
-  app.listen(port, '0.0.0.0', () => {
+  httpServer.listen(port, '0.0.0.0', () => {
     console.log(`CineScope server listening on http://localhost:${port}`);
   });
 }

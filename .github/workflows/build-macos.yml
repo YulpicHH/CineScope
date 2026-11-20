@@ -38,12 +38,7 @@ jobs:
           workspaces: 'src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+        run: npm install
 
       - name: Ensure Tauri app icons exist
         run: |

@@ -1,16 +1,18 @@
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::fs;
-#[cfg(target_os = "macos")]
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::path::{Path, PathBuf};
 use std::process::Child;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 #[cfg(desktop)]
 use tauri::{webview::NewWindowResponse, Theme};
-use tauri::{Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, RunEvent, State, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_http::reqwest;
 
 const KINOPOISK_API_URL: &str = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
@@ -18,8 +20,13 @@ const PLAYER_WINDOW_LABEL: &str = "player";
 
 const PLAYER_MODE_FIREFOX: &str = "firefox_window";
 const PLAYER_MODE_CHROME: &str = "chrome_window";
+const PLAYER_MODE_EDGE: &str = "edge_window";
 const PLAYER_MODE_EMBEDDED: &str = "embedded_webkit";
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(target_os = "macos")]
 const UA_DESKTOP_SAFARI_MACOS: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
 
@@ -73,7 +80,7 @@ const PLAYER_POPUP_BLOCK_SCRIPT: &str = r#"
 })();
 "#;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const FIREFOX_USER_JS: &str = r#"
 // CineScope isolated cinema player profile
 user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
@@ -108,7 +115,7 @@ user_pref("media.mediasource.vp9.enabled", true);
 user_pref("media.mediasource.webm.enabled", true);
 "#;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const FIREFOX_USER_CHROME_CSS: &str = r#"
 /* CineScope clean cinema window: hide tabs, address bar, bookmarks, sidebars */
 #TabsToolbar,
@@ -147,8 +154,10 @@ struct PlayerWindowState {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailablePlayerBrowsers {
+    pub platform: String,
     pub firefox: bool,
     pub chrome: bool,
+    pub edge: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -181,6 +190,33 @@ pub struct KinopoiskCandidatesResult {
     pub code: Option<String>,
     pub message: Option<String>,
     pub retryable: bool,
+}
+
+fn current_platform_id() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        "linux"
+    }
+}
+
+fn default_player_mode() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        // На Windows встроенное окно работает на WebView2 (Chromium) с нативной поддержкой 4K
+        PLAYER_MODE_EMBEDDED
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PLAYER_MODE_FIREFOX
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -227,6 +263,101 @@ fn find_chrome_executable() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
+fn find_edge_executable() -> Option<PathBuf> {
+    let mut candidates = vec![PathBuf::from(
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    )];
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home_apps = PathBuf::from(home).join("Applications");
+        candidates.push(
+            home_apps.join("Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        );
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_program_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for env_key in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+        if let Ok(raw) = std::env::var(env_key) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                let path = PathBuf::from(trimmed);
+                if !roots.contains(&path) {
+                    roots.push(path);
+                }
+            }
+        }
+    }
+
+    for fallback in [r"C:\Program Files", r"C:\Program Files (x86)"] {
+        let path = PathBuf::from(fallback);
+        if !roots.contains(&path) {
+            roots.push(path);
+        }
+    }
+
+    roots
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_browser(relative_paths: &[&str]) -> Option<PathBuf> {
+    let roots = windows_program_roots();
+    for rel in relative_paths {
+        for root in &roots {
+            let candidate = root.join(rel);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn find_firefox_executable() -> Option<PathBuf> {
+    find_windows_browser(&[
+        r"Mozilla Firefox\firefox.exe",
+        r"Firefox Developer Edition\firefox.exe",
+        r"Firefox Nightly\firefox.exe",
+    ])
+}
+
+#[cfg(target_os = "windows")]
+fn find_chrome_executable() -> Option<PathBuf> {
+    find_windows_browser(&[
+        r"Google\Chrome\Application\chrome.exe",
+        r"Google\Chrome Beta\Application\chrome.exe",
+        r"Google\Chrome SxS\Application\chrome.exe",
+    ])
+}
+
+#[cfg(target_os = "windows")]
+fn find_edge_executable() -> Option<PathBuf> {
+    find_windows_browser(&[
+        r"Microsoft\Edge\Application\msedge.exe",
+        r"Microsoft\Edge Beta\Application\msedge.exe",
+        r"Microsoft\Edge Dev\Application\msedge.exe",
+    ])
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn configure_browser_command(command: &mut Command) {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn prepare_firefox_player_profile(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
@@ -248,7 +379,7 @@ fn prepare_firefox_player_profile(app: &tauri::AppHandle) -> Result<PathBuf, Str
     Ok(profile_dir)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn cleanup_firefox_session_artifacts(profile_dir: &Path) {
     let files_to_remove = [
         "sessionstore.jsonlz4",
@@ -262,30 +393,43 @@ fn cleanup_firefox_session_artifacts(profile_dir: &Path) {
     let _ = fs::remove_dir_all(profile_dir.join("sessionstore-backups"));
 }
 
-#[cfg(target_os = "macos")]
-fn prepare_chrome_player_profile(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn prepare_chromium_player_profile(
+    app: &tauri::AppHandle,
+    profile_folder_name: &str,
+    browser_label: &str,
+) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
         .app_data_dir()
         .map_err(|err| format!("Не удалось получить каталог данных CineScope: {}", err))?;
-    let profile_dir = base_dir.join("chrome-player-profile");
+    let profile_dir = base_dir.join(profile_folder_name);
 
-    fs::create_dir_all(&profile_dir)
-        .map_err(|err| format!("Не удалось подготовить профиль плеера Chrome: {}", err))?;
+    fs::create_dir_all(&profile_dir).map_err(|err| {
+        format!(
+            "Не удалось подготовить профиль плеера {}: {}",
+            browser_label, err
+        )
+    })?;
 
     let first_run_marker = profile_dir.join("First Run");
     if !first_run_marker.exists() {
         let _ = fs::write(&first_run_marker, "");
     }
 
-    cleanup_chrome_lock_artifacts(&profile_dir);
+    cleanup_chromium_lock_artifacts(&profile_dir);
 
     Ok(profile_dir)
 }
 
-#[cfg(target_os = "macos")]
-fn cleanup_chrome_lock_artifacts(profile_dir: &Path) {
-    let lock_files = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn cleanup_chromium_lock_artifacts(profile_dir: &Path) {
+    let lock_files = [
+        "SingletonLock",
+        "SingletonCookie",
+        "SingletonSocket",
+        "Lockfile",
+    ];
     for file_name in lock_files {
         let _ = fs::remove_file(profile_dir.join(file_name));
     }
@@ -310,26 +454,34 @@ fn terminate_browser_player(player_state: &PlayerWindowState) {
 
 fn normalize_player_mode(raw: Option<&str>) -> &'static str {
     match raw.map(str::trim) {
+        Some(PLAYER_MODE_FIREFOX) | Some("firefox_4k") => PLAYER_MODE_FIREFOX,
         Some(PLAYER_MODE_CHROME) | Some("chrome_4k") => PLAYER_MODE_CHROME,
-        Some(PLAYER_MODE_EMBEDDED) | Some("safari_native") => PLAYER_MODE_EMBEDDED,
-        _ => PLAYER_MODE_FIREFOX,
+        Some(PLAYER_MODE_EDGE) | Some("edge_4k") => PLAYER_MODE_EDGE,
+        Some(PLAYER_MODE_EMBEDDED) | Some("embedded_webview") | Some("safari_native") => {
+            PLAYER_MODE_EMBEDDED
+        }
+        _ => default_player_mode(),
     }
 }
 
 #[tauri::command]
 fn check_player_browsers() -> AvailablePlayerBrowsers {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         AvailablePlayerBrowsers {
+            platform: current_platform_id().to_string(),
             firefox: find_firefox_executable().is_some(),
             chrome: find_chrome_executable().is_some(),
+            edge: find_edge_executable().is_some(),
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         AvailablePlayerBrowsers {
+            platform: current_platform_id().to_string(),
             firefox: false,
             chrome: false,
+            edge: false,
         }
     }
 }
@@ -457,6 +609,49 @@ async fn fetch_kinopoisk_candidates(
     })
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn launch_chromium_app_window(
+    app: &tauri::AppHandle,
+    executable: &Path,
+    profile_folder_name: &str,
+    browser_label: &str,
+    extra_disabled_features: &str,
+    parsed_url: &Url,
+    player_state: &PlayerWindowState,
+) -> Result<(), String> {
+    if let Some(existing_window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
+        let _ = existing_window.destroy();
+    }
+
+    terminate_browser_player(player_state);
+
+    let profile_dir = prepare_chromium_player_profile(app, profile_folder_name, browser_label)?;
+    let user_data_arg = format!("--user-data-dir={}", profile_dir.to_string_lossy());
+    let app_arg = format!("--app={}", parsed_url.as_str());
+    let disabled_features_arg = format!("--disable-features={}", extra_disabled_features);
+
+    let mut command = Command::new(executable);
+    command
+        .arg(user_data_arg)
+        .arg(app_arg)
+        .arg("--window-size=1366,820")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg(disabled_features_arg)
+        .arg("--force-dark-mode");
+    configure_browser_command(&mut command);
+
+    let child = command
+        .spawn()
+        .map_err(|err| format!("Не удалось запустить чистое окно {}: {}", browser_label, err))?;
+
+    if let Ok(mut guard) = player_state.browser_child.lock() {
+        *guard = Some(child);
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn open_watch_window(
     app: tauri::AppHandle,
@@ -478,7 +673,7 @@ async fn open_watch_window(
 
     let resolved_mode = normalize_player_mode(player_mode.as_deref());
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     if resolved_mode == PLAYER_MODE_FIREFOX {
         if let Some(firefox_path) = find_firefox_executable() {
             if let Some(existing_window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
@@ -488,7 +683,8 @@ async fn open_watch_window(
             terminate_browser_player(&player_state);
 
             let profile_dir = prepare_firefox_player_profile(&app)?;
-            let child = Command::new(&firefox_path)
+            let mut command = Command::new(&firefox_path);
+            command
                 .arg("-profile")
                 .arg(&profile_dir)
                 .arg("--no-remote")
@@ -497,10 +693,10 @@ async fn open_watch_window(
                 .arg("1366")
                 .arg("-height")
                 .arg("820")
-                .arg(parsed_url.as_str())
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .arg(parsed_url.as_str());
+            configure_browser_command(&mut command);
+
+            let child = command
                 .spawn()
                 .map_err(|err| format!("Не удалось запустить чистое окно Firefox: {}", err))?;
 
@@ -512,45 +708,40 @@ async fn open_watch_window(
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     if resolved_mode == PLAYER_MODE_CHROME {
         if let Some(chrome_path) = find_chrome_executable() {
-            if let Some(existing_window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
-                let _ = existing_window.destroy();
-            }
-
-            terminate_browser_player(&player_state);
-
-            let profile_dir = prepare_chrome_player_profile(&app)?;
-            let user_data_arg = format!("--user-data-dir={}", profile_dir.to_string_lossy());
-            let app_arg = format!("--app={}", parsed_url.as_str());
-
-            let child = Command::new(&chrome_path)
-                .arg(user_data_arg)
-                .arg(app_arg)
-                .arg("--window-size=1366,820")
-                .arg("--no-first-run")
-                .arg("--no-default-browser-check")
-                .arg("--disable-features=Translate,MediaRouter")
-                .arg("--force-dark-mode")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|err| format!("Не удалось запустить чистое окно Chrome: {}", err))?;
-
-            if let Ok(mut guard) = player_state.browser_child.lock() {
-                *guard = Some(child);
-            }
-
-            return Ok(());
+            return launch_chromium_app_window(
+                &app,
+                &chrome_path,
+                "chrome-player-profile",
+                "Chrome",
+                "Translate,MediaRouter",
+                &parsed_url,
+                &player_state,
+            );
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if resolved_mode == PLAYER_MODE_EDGE {
+        if let Some(edge_path) = find_edge_executable() {
+            return launch_chromium_app_window(
+                &app,
+                &edge_path,
+                "edge-player-profile",
+                "Microsoft Edge",
+                "Translate,MediaRouter,msEdgeSidebarV2",
+                &parsed_url,
+                &player_state,
+            );
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = resolved_mode;
 
-    // Встроенное окно CineScope (WebKit) — выбранный режим или автоматический фоллбэк
+    // Встроенное окно CineScope (WebView2 4K на Windows / WebKit на macOS) — выбранный режим или автоматический фоллбэк
     terminate_browser_player(&player_state);
 
     #[cfg(desktop)]
@@ -586,8 +777,11 @@ async fn open_watch_window(
         PLAYER_WINDOW_LABEL,
         WebviewUrl::External(parsed_url),
     )
-    .user_agent(UA_DESKTOP_SAFARI_MACOS)
     .initialization_script_for_all_frames(PLAYER_POPUP_BLOCK_SCRIPT);
+
+    // На macOS используем десктопный Safari UA; на Windows оставляем нативный Chromium/Edge WebView2 UA для 4K VP9/AV1
+    #[cfg(target_os = "macos")]
+    let builder = builder.user_agent(UA_DESKTOP_SAFARI_MACOS);
 
     #[cfg(desktop)]
     let builder = builder
@@ -614,7 +808,7 @@ pub fn run() {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(HttpClientState { client })
         .manage(PlayerWindowState {
             browser_child: Mutex::new(None),
@@ -627,6 +821,14 @@ pub fn run() {
             check_player_browsers,
             check_firefox_available
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running CineScope application");
+        .build(tauri::generate_context!())
+        .expect("error while building CineScope application");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            if let Some(player_state) = app_handle.try_state::<PlayerWindowState>() {
+                terminate_browser_player(&player_state);
+            }
+        }
+    });
 }

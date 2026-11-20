@@ -1,0 +1,242 @@
+name: Release Desktop (Windows & macOS)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Тег релиза (например, v1.0.0; если пусто — v1.0.0-desktop.<номер запуска>)'
+        required: false
+        default: ''
+      platforms:
+        description: 'Целевые платформы сборки'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      build_windows: ${{ steps.meta.outputs.build_windows }}
+      build_macos: ${{ steps.meta.outputs.build_macos }}
+    steps:
+      - name: Resolve tag and target platforms
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            PLATFORMS="all"
+          else
+            if [[ -n "${{ github.event.inputs.release_tag }}" ]]; then
+              TAG="${{ github.event.inputs.release_tag }}"
+            else
+              TAG="v1.0.0-desktop.${GITHUB_RUN_NUMBER}"
+            fi
+            PLATFORMS="${{ github.event.inputs.platforms }}"
+            if [[ -z "${PLATFORMS}" ]]; then
+              PLATFORMS="all"
+            fi
+          fi
+
+          if [[ "${PLATFORMS}" == "all" || "${PLATFORMS}" == "windows" ]]; then
+            echo "build_windows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_windows=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ "${PLATFORMS}" == "all" || "${PLATFORMS}" == "macos" ]]; then
+            echo "build_macos=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_macos=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build Windows x64 (.exe + portable .zip)
+    needs: prepare
+    if: needs.prepare.outputs.build_windows == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust stable (Windows x64 MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Run frontend checks & unit tests
+        run: |
+          npm run lint
+          npm test
+
+      - name: Ensure Windows app icon exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "src-tauri/icons/icon.ico")) {
+            if (Test-Path "assets/app-icon.png") {
+              npx tauri icon assets/app-icon.png
+            } else {
+              throw "Не найден assets/app-icon.png для генерации icon.ico"
+            }
+          }
+
+      - name: Build Windows NSIS installer (.exe)
+        run: npx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Package Windows portable archive (.zip)
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-portable.ps1 -Target x86_64-pc-windows-msvc
+
+      - name: Collect Windows release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe" release-assets/
+          Copy-Item "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*-portable.zip" release-assets/
+          Get-ChildItem release-assets
+
+      - name: Upload Windows assets artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinescope-windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS Apple Silicon (.dmg)
+    needs: prepare
+    if: needs.prepare.outputs.build_macos == 'true'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust stable (Apple Silicon aarch64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Ensure macOS app icons exist
+        run: |
+          if [ ! -f src-tauri/icons/icon.icns ] || [ ! -f src-tauri/icons/128x128@2x.png ]; then
+            if [ -f assets/app-icon.png ]; then
+              npx tauri icon assets/app-icon.png
+            else
+              echo "Ошибка: не найден файл assets/app-icon.png для генерации иконок."
+              exit 1
+            fi
+          fi
+
+      - name: Build macOS .dmg
+        run: npx tauri build --target aarch64-apple-darwin
+
+      - name: Collect macOS release assets
+        run: |
+          mkdir -p release-assets
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg release-assets/
+          ls -la release-assets
+
+      - name: Upload macOS assets artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinescope-macos-aarch64
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish unified GitHub Release
+    needs: [prepare, build-windows, build-macos]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build-windows.result == 'success' || needs.build-macos.result == 'success') &&
+      needs.build-windows.result != 'failure' &&
+      needs.build-macos.result != 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all built desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-release-assets
+          merge-multiple: true
+
+      - name: List final release assets
+        run: ls -la all-release-assets
+
+      - name: Publish unified GitHub Release (Windows + macOS)
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: CineScope ${{ needs.prepare.outputs.tag }} (Windows & macOS)
+          draft: false
+          prerelease: false
+          files: all-release-assets/*
+          body: |
+            ## CineScope для Windows (x64) и macOS (Apple Silicon)
+
+            ### Windows 10 / 11 (64-bit)
+            - **Установщик (`*-setup.exe`)** — стандартная установка для текущего пользователя без прав администратора, ярлыки в меню «Пуск» и на рабочем столе, автоматическая установка WebView2 при необходимости.
+            - **Портативная версия (`*-portable.zip`)** — распакуйте архив в любую папку и запустите `CineScope.exe` напрямую.
+            - **Плеер 4K**: по умолчанию используется встроенное окно на базе **Windows WebView2 (4K)**; в настройках также доступны изолированные чистые окна **Chrome**, **Microsoft Edge** и **Firefox**.
+
+            > **Первый запуск без платной цифровой подписи (Windows SmartScreen):**
+            > Если Windows покажет синее окно «Система Windows защитила ваш компьютер», нажмите **«Подробнее» → «Выполнить в любом случае»**.
+
+            ---
+
+            ### macOS (Apple Silicon / M1–M4)
+            - Скачайте файл `.dmg` из раздела **Assets**, откройте его и перетащите **CineScope.app** в папку **Applications**.
+
+            > **Первый запуск без Apple Developer сертификата:**
+            > Если macOS Gatekeeper покажет предупреждение о неподписанном приложении, выполните один раз в Терминале:
+            > ```bash
+            > xattr -cr /Applications/CineScope.app
+            > ```
+
+            ---
+
+            ### Настройка API-ключей
+            При первом запуске введите собственный ключ **TMDB API (v3)** (и при желании **Kinopoisk Unofficial API**) или попробуйте приложение в демо-режиме. Все ключи, коллекция и история просмотров хранятся только локально на вашем устройстве.

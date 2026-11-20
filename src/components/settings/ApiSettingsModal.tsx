@@ -19,14 +19,21 @@ import { validateTmdbApiKey } from '../../services/apiKeys';
 import {
   checkPlayerBrowsers,
   getPlayerMode,
+  hasStoredPlayerMode,
   setPlayerMode,
   type AvailablePlayerBrowsers,
 } from '../../services/playerSettings';
 import { hasInternalWhitespace } from '../../utils/apiKeysRules';
-import { isTauriRuntime, openExternalUrl } from '../../utils/platform';
 import {
-  PLAYER_MODE_OPTIONS,
+  detectClientPlatform,
+  isTauriRuntime,
+  openExternalUrl,
+  type DesktopPlatform,
+} from '../../utils/platform';
+import {
+  getDefaultPlayerMode,
   getPlayerModeOption,
+  getPlayerModeOptions,
   type PlayerModeId,
 } from '../../utils/playerProfile';
 
@@ -54,6 +61,9 @@ export function ApiSettingsModal() {
 
   const [tmdbInput, setTmdbInput] = useState(userTmdbApiKey);
   const [kinopoiskInput, setKinopoiskInput] = useState(userKinopoiskApiKey);
+  const [desktopPlatform, setDesktopPlatform] = useState<DesktopPlatform>(() =>
+    detectClientPlatform(),
+  );
   const [playerMode, setPlayerModeState] = useState<PlayerModeId>(() =>
     getPlayerMode(),
   );
@@ -71,22 +81,27 @@ export function ApiSettingsModal() {
     const wasOpen = prevOpenRef.current;
     prevOpenRef.current = isOpen;
     if (isOpen && !wasOpen) {
+      const detected = availableBrowsers?.platform ?? detectClientPlatform();
+      setDesktopPlatform(detected);
       setTmdbInput(userTmdbApiKey);
       setKinopoiskInput(userKinopoiskApiKey);
-      setPlayerModeState(getPlayerMode());
+      setPlayerModeState(getPlayerMode(detected));
       setShowTmdbKey(false);
       setShowKpKey(false);
       setErrorMessage(null);
       setInfoMessage(null);
     }
-  }, [isOpen, userTmdbApiKey, userKinopoiskApiKey]);
+  }, [isOpen, userTmdbApiKey, userKinopoiskApiKey, availableBrowsers]);
 
   useEffect(() => {
     if (!isOpen || !isDesktopTauri || isFirstRun) return;
     let active = true;
     void checkPlayerBrowsers().then((browsers) => {
-      if (active) {
-        setAvailableBrowsers(browsers);
+      if (!active) return;
+      setAvailableBrowsers(browsers);
+      setDesktopPlatform(browsers.platform);
+      if (!hasStoredPlayerMode()) {
+        setPlayerModeState(getDefaultPlayerMode(browsers.platform));
       }
     });
     return () => {
@@ -177,16 +192,18 @@ export function ApiSettingsModal() {
 
   const handleSelectPlayerMode = (nextMode: PlayerModeId) => {
     if (validating) return;
-    const saved = setPlayerMode(nextMode);
+    const saved = setPlayerMode(nextMode, desktopPlatform);
     setPlayerModeState(saved);
     setErrorMessage(null);
-    const option = getPlayerModeOption(saved);
+    const option = getPlayerModeOption(saved, desktopPlatform);
     setInfoMessage(
       `Режим плеера «${option.label} (${option.badge})» сохранён — применится при следующем нажатии «Смотреть».`,
     );
   };
 
-  const activePlayerOption = getPlayerModeOption(playerMode);
+  const playerModeOptions = getPlayerModeOptions(desktopPlatform);
+  const activePlayerOption = getPlayerModeOption(playerMode, desktopPlatform);
+  const isWindowsDesktop = desktopPlatform === 'windows';
 
   return (
     <div
@@ -406,12 +423,30 @@ export function ApiSettingsModal() {
                       Chrome не найден — откроется встроенное окно
                     </span>
                   )
+                ) : playerMode === 'edge_window' && availableBrowsers ? (
+                  availableBrowsers.edge ? (
+                    <span
+                      data-testid="browser-status-badge"
+                      className="text-[11px] font-medium text-emerald-400"
+                    >
+                      Edge готов
+                    </span>
+                  ) : (
+                    <span
+                      data-testid="browser-status-badge"
+                      className="text-[11px] font-medium text-amber-300"
+                    >
+                      Edge не найден — откроется встроенное окно
+                    </span>
+                  )
                 ) : playerMode === 'embedded_webkit' ? (
                   <span
                     data-testid="browser-status-badge"
-                    className="text-[11px] font-medium text-slate-400"
+                    className={`text-[11px] font-medium ${
+                      isWindowsDesktop ? 'text-emerald-400' : 'text-slate-400'
+                    }`}
                   >
-                    Внутри приложения
+                    {isWindowsDesktop ? 'WebView2 4K готов' : 'Внутри приложения'}
                   </span>
                 ) : null}
               </div>
@@ -419,9 +454,11 @@ export function ApiSettingsModal() {
               <div
                 role="radiogroup"
                 aria-label="Выбор браузера для окна просмотра"
-                className="grid grid-cols-3 gap-2"
+                className={`grid gap-2 ${
+                  playerModeOptions.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
+                }`}
               >
-                {PLAYER_MODE_OPTIONS.map((option) => {
+                {playerModeOptions.map((option) => {
                   const selected = playerMode === option.id;
                   const isHighRes = option.badge === '4K';
                   return (
@@ -433,17 +470,17 @@ export function ApiSettingsModal() {
                       data-testid={`player-mode-${option.id}`}
                       disabled={validating}
                       onClick={() => handleSelectPlayerMode(option.id)}
-                      className={`flex flex-col items-start gap-0.5 rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50 ${
+                      className={`flex min-h-[48px] flex-col items-start justify-center gap-0.5 rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50 ${
                         selected
                           ? 'border-blue-500/70 bg-blue-600/20 text-white'
                           : 'border-white/10 bg-[#090B10] text-slate-300 hover:border-white/25 hover:text-white'
                       }`}
                     >
-                      <span className="text-xs font-semibold leading-tight">
+                      <span className="whitespace-nowrap text-xs font-semibold leading-tight">
                         {option.label}
                       </span>
                       <span
-                        className={`text-[11px] font-medium leading-tight ${
+                        className={`whitespace-nowrap text-[11px] font-medium leading-tight ${
                           isHighRes
                             ? selected
                               ? 'text-blue-300'

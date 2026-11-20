@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ThemeMode } from '../types';
 
 const THEME_STORAGE_KEY = 'cinescope_theme';
@@ -43,8 +43,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setThemeState((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
 
+  const value = useMemo<ThemeContextValue>(
+    () => ({ theme, setTheme, toggleTheme }),
+    [theme, setTheme, toggleTheme],
+  );
+
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   );

@@ -1,0 +1,28 @@
+[package]
+name = "cinescope"
+version = "1.0.0"
+description = "Персональная платформа для поиска фильмов и сериалов по настроению"
+authors = ["CineScope"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "cinescope_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-http = { version = "2", features = ["json"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

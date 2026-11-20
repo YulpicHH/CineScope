@@ -18,10 +18,10 @@ import type {
   VideoItem,
 } from '../types';
 import { filterDemoByMood, filterDemoCatalog } from '../utils/demoFilter';
+import { buildTmdbImageUrl, type TmdbImageSize } from '../utils/imageUrl';
 import { getMoodGenresForMediaType } from '../utils/moodMapping';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 
 export class TmdbApiError extends Error {
   readonly status: number;
@@ -47,11 +47,9 @@ export function hasTmdbKey(): boolean {
 
 export function getTmdbImageUrl(
   path: string | null,
-  size: 'w300' | 'w500' | 'w780' | 'w1280' = 'w500',
+  size: TmdbImageSize = 'w500',
 ): string | null {
-  if (!path) return null;
-  if (path.startsWith('http://') || path.startsWith('https://')) return path;
-  return `${TMDB_IMAGE_BASE}/${size}${path}`;
+  return buildTmdbImageUrl(path, size);
 }
 
 interface RawTmdbMedia {
@@ -187,6 +185,7 @@ function normalizeMediaItem(raw: RawTmdbMedia, forcedType?: MediaType): MediaIte
 async function tmdbFetch<T>(
   endpoint: string,
   params: Record<string, string | number | undefined> = {},
+  signal?: AbortSignal,
 ): Promise<T> {
   const apiKey = getTmdbApiKey();
   if (!apiKey) {
@@ -207,8 +206,11 @@ async function tmdbFetch<T>(
 
   let response: Response;
   try {
-    response = await fetch(url.toString());
-  } catch {
+    response = await fetch(url.toString(), { signal });
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw err;
+    }
     throw new TmdbApiError(
       'Сетевая ошибка при обращении к TMDB. Проверьте подключение к интернету.',
       0,
@@ -304,6 +306,7 @@ export async function fetchCatalogPage(
   filters: CatalogFilters,
   page: number,
   useDemo: boolean,
+  signal?: AbortSignal,
 ): Promise<PaginatedCatalogResult> {
   if (useDemo || !hasTmdbKey()) {
     const all = filterDemoCatalog(filters);
@@ -320,17 +323,25 @@ export async function fetchCatalogPage(
   if (trimmedQuery.length > 0) {
     // Поиск по названию и параллельно по персонам (актёрам и режиссёрам)
     const [titleRes, personRes] = await Promise.all([
-      tmdbFetch<TmdbListResponse>(`/search/${filters.mediaType}`, {
-        query: trimmedQuery,
-        page,
-        include_adult: 'false',
-      }),
+      tmdbFetch<TmdbListResponse>(
+        `/search/${filters.mediaType}`,
+        {
+          query: trimmedQuery,
+          page,
+          include_adult: 'false',
+        },
+        signal,
+      ),
       page === 1
-        ? tmdbFetch<TmdbPersonSearchResponse>('/search/person', {
-            query: trimmedQuery,
-            page: 1,
-            include_adult: 'false',
-          }).catch(() => ({ results: [] }))
+        ? tmdbFetch<TmdbPersonSearchResponse>(
+            '/search/person',
+            {
+              query: trimmedQuery,
+              page: 1,
+              include_adult: 'false',
+            },
+            signal,
+          ).catch(() => ({ results: [] }))
         : Promise.resolve({ results: [] }),
     ]);
 
@@ -401,7 +412,11 @@ export async function fetchCatalogPage(
     }
   }
 
-  const data = await tmdbFetch<TmdbListResponse>(`/discover/${filters.mediaType}`, params);
+  const data = await tmdbFetch<TmdbListResponse>(
+    `/discover/${filters.mediaType}`,
+    params,
+    signal,
+  );
 
   return {
     items: data.results.map((r) => normalizeMediaItem(r, filters.mediaType)),

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bookmark, Check, Info, Sparkles, Star } from 'lucide-react';
-import { motion } from 'motion/react';
 import { MediaCarousel } from '../components/cards/MediaCarousel';
 import { BackdropArtwork, PosterArtwork } from '../components/ui/PosterArtwork';
 import { HeroSkeleton } from '../components/ui/Skeleton';
@@ -85,12 +84,9 @@ export function HomePage() {
       ) : error ? (
         <ErrorState message={error} onRetry={() => void loadHome()} />
       ) : hero ? (
-        <motion.section
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25 }}
+        <section
           aria-label="Рекомендуемый фильм"
-          className={`relative overflow-hidden rounded-2xl border border-slate-200/80 bg-[#090B10] dark:border-white/[0.08] ${
+          className={`animate-hero-enter relative overflow-hidden rounded-2xl border border-slate-200/80 bg-[#090B10] dark:border-white/[0.08] ${
             hero.backdropPath ? 'min-h-[440px] sm:min-h-[500px]' : 'min-h-[340px]'
           }`}
         >
@@ -98,6 +94,7 @@ export function HomePage() {
             <BackdropArtwork
               backdropPath={hero.backdropPath}
               title={hero.title}
+              priority
             />
             <div
               className="absolute inset-0 bg-gradient-to-t from-[#090B10] via-[#090B10]/75 to-[#090B10]/20"
@@ -171,7 +168,7 @@ export function HomePage() {
                 <button
                   type="button"
                   onClick={() => toggleWatchlist(hero)}
-                  className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-md transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-blue-400"
+                  className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-white/20 bg-white/15 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/25 focus-visible:outline-2 focus-visible:outline-blue-400"
                 >
                   {heroInCollection ? (
                     <>
@@ -190,7 +187,7 @@ export function HomePage() {
 
                 <Link
                   to="/mood"
-                  className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-violet-400/30 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-200 backdrop-blur-md transition-colors hover:bg-violet-500/25"
+                  className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-violet-400/30 bg-violet-500/20 px-4 py-2.5 text-sm font-medium text-violet-200 transition-colors hover:bg-violet-500/30"
                 >
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
                   Подобрать по настроению
@@ -210,12 +207,14 @@ export function HomePage() {
                     title={hero.title}
                     year={hero.year}
                     mediaType={hero.mediaType}
+                    variant="detail"
+                    priority
                   />
                 </div>
               </Link>
             ) : null}
           </div>
-        </motion.section>
+        </section>
       ) : null}
 
       {/* Персональные рекомендации */}

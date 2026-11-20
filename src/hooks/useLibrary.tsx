@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -25,6 +26,11 @@ interface ToastMessage {
   text: string;
 }
 
+interface ToastContextValue {
+  toast: ToastMessage | null;
+  dismissToast: () => void;
+}
+
 interface LibraryContextValue {
   items: LibraryItem[];
   watchlistItems: LibraryItem[];
@@ -39,11 +45,10 @@ interface LibraryContextValue {
   rateTitle: (media: MediaItem, rating: number | null) => void;
   removeHistoryEntry: (id: number, mediaType: MediaType) => void;
   clearAllData: () => void;
-  toast: ToastMessage | null;
-  dismissToast: () => void;
 }
 
 const LibraryContext = createContext<LibraryContextValue | null>(null);
+const ToastContext = createContext<ToastContextValue | null>(null);
 
 function loadInitialLibrary(): LibraryStateV1 {
   try {
@@ -56,6 +61,8 @@ function loadInitialLibrary(): LibraryStateV1 {
 export function LibraryProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LibraryStateV1>(loadInitialLibrary);
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const itemsRef = useRef<LibraryItem[]>(state.items);
+  itemsRef.current = state.items;
 
   useEffect(() => {
     try {
@@ -77,10 +84,17 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   const dismissToast = useCallback(() => setToast(null), []);
 
+  const entryMap = useMemo(() => {
+    const map = new Map<string, LibraryItem>();
+    for (const item of state.items) {
+      map.set(`${item.mediaType}:${item.id}`, item);
+    }
+    return map;
+  }, [state.items]);
+
   const getEntry = useCallback(
-    (id: number, mediaType: MediaType) =>
-      state.items.find((item) => item.id === id && item.mediaType === mediaType),
-    [state.items],
+    (id: number, mediaType: MediaType) => entryMap.get(`${mediaType}:${id}`),
+    [entryMap],
   );
 
   const setStatus = useCallback(
@@ -98,29 +112,29 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   const toggleWatchlist = useCallback(
     (media: MediaItem) => {
-      const existing = state.items.find(
+      const existing = itemsRef.current.find(
         (item) => item.id === media.id && item.mediaType === media.mediaType,
       );
       const next = existing?.status === 'watchlist' ? null : 'watchlist';
       setStatus(media, next);
     },
-    [state.items, setStatus],
+    [setStatus],
   );
 
   const markWatched = useCallback(
     (media: MediaItem) => {
-      const existing = state.items.find(
+      const existing = itemsRef.current.find(
         (item) => item.id === media.id && item.mediaType === media.mediaType,
       );
       const next = existing?.status === 'watched' ? null : 'watched';
       setStatus(media, next);
     },
-    [state.items, setStatus],
+    [setStatus],
   );
 
   const toggleFavorite = useCallback(
     (media: MediaItem) => {
-      const existing = state.items.find(
+      const existing = itemsRef.current.find(
         (item) => item.id === media.id && item.mediaType === media.mediaType,
       );
       const willBeFav = !existing?.isFavorite;
@@ -134,7 +148,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           : `«${media.title}» убран из избранного`,
       );
     },
-    [state.items, showToast],
+    [showToast],
   );
 
   const rateTitle = useCallback(
@@ -189,27 +203,47 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [state.items],
   );
 
+  const libraryValue = useMemo<LibraryContextValue>(
+    () => ({
+      items: state.items,
+      watchlistItems,
+      watchedItems,
+      favoriteItems,
+      recommendationProfile,
+      getEntry,
+      setStatus,
+      toggleWatchlist,
+      markWatched,
+      toggleFavorite,
+      rateTitle,
+      removeHistoryEntry,
+      clearAllData,
+    }),
+    [
+      state.items,
+      watchlistItems,
+      watchedItems,
+      favoriteItems,
+      recommendationProfile,
+      getEntry,
+      setStatus,
+      toggleWatchlist,
+      markWatched,
+      toggleFavorite,
+      rateTitle,
+      removeHistoryEntry,
+      clearAllData,
+    ],
+  );
+
+  const toastValue = useMemo<ToastContextValue>(
+    () => ({ toast, dismissToast }),
+    [toast, dismissToast],
+  );
+
   return (
-    <LibraryContext.Provider
-      value={{
-        items: state.items,
-        watchlistItems,
-        watchedItems,
-        favoriteItems,
-        recommendationProfile,
-        getEntry,
-        setStatus,
-        toggleWatchlist,
-        markWatched,
-        toggleFavorite,
-        rateTitle,
-        removeHistoryEntry,
-        clearAllData,
-        toast,
-        dismissToast,
-      }}
-    >
-      {children}
+    <LibraryContext.Provider value={libraryValue}>
+      <ToastContext.Provider value={toastValue}>{children}</ToastContext.Provider>
     </LibraryContext.Provider>
   );
 }
@@ -218,6 +252,14 @@ export function useLibrary(): LibraryContextValue {
   const ctx = useContext(LibraryContext);
   if (!ctx) {
     throw new Error('useLibrary должен использоваться внутри LibraryProvider');
+  }
+  return ctx;
+}
+
+export function useToast(): ToastContextValue {
+  const ctx = useContext(ToastContext);
+  if (!ctx) {
+    throw new Error('useToast должен использоваться внутри LibraryProvider');
   }
   return ctx;
 }

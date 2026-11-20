@@ -1,8 +1,8 @@
 import { X } from 'lucide-react';
-import { useLibrary } from '../../hooks/useLibrary';
+import { useToast } from '../../hooks/useLibrary';
 
 export function Toast() {
-  const { toast, dismissToast } = useLibrary();
+  const { toast, dismissToast } = useToast();
 
   if (!toast) return null;
 
@@ -10,7 +10,7 @@ export function Toast() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-20 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-900 shadow-lg backdrop-blur-md dark:border-white/15 dark:bg-[#141923]/95 dark:text-slate-100 md:bottom-6 md:right-6"
+      className="fixed bottom-20 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 shadow-lg dark:border-white/15 dark:bg-[#141923] dark:text-slate-100 md:bottom-6 md:right-6"
     >
       <span className="flex-1">{toast.text}</span>
       <button

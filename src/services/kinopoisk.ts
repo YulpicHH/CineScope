@@ -1,9 +1,13 @@
+import { invoke } from '@tauri-apps/api/core';
 import {
   buildKinokinoUrl,
   isValidKinopoiskCacheRecord,
+  selectBestKinopoiskMatch,
   type KinokinoMediaType,
+  type KinopoiskApiCandidate,
   type KinopoiskCacheRecord,
 } from '../utils/kinopoiskMatcher';
+import { isTauriRuntime } from '../utils/platform';
 
 const KP_CLIENT_CACHE_KEY = 'cinescope_kp_cache_v1';
 
@@ -32,6 +36,14 @@ export type KinopoiskWatchResolution =
       message: string;
       retryable: boolean;
     };
+
+interface TauriKinopoiskCandidatesResult {
+  status: string;
+  items?: KinopoiskApiCandidate[];
+  code?: string | null;
+  message?: string | null;
+  retryable?: boolean;
+}
 
 const inFlightRequests = new Map<string, Promise<KinopoiskWatchResolution>>();
 
@@ -108,10 +120,124 @@ export function clearKinopoiskClientCache(): void {
   }
 }
 
+async function fetchResolutionViaTauri(
+  params: ResolveWatchLinkParams,
+  cacheKey: string,
+): Promise<KinopoiskWatchResolution> {
+  const title = params.title.trim();
+  const originalTitle = params.originalTitle.trim();
+  const primaryKeyword = title || originalTitle;
+
+  if (!primaryKeyword) {
+    return {
+      status: 'error',
+      message: 'Некорректные параметры для поиска произведения.',
+      retryable: false,
+    };
+  }
+
+  const typeParam = params.mediaType === 'movie' ? 'FILM' : 'ALL';
+  const matchQuery = {
+    tmdbId: params.tmdbId,
+    mediaType: params.mediaType,
+    title: title || originalTitle,
+    originalTitle: originalTitle || title,
+    year: params.year.trim(),
+  };
+
+  try {
+    const firstResponse = await invoke<TauriKinopoiskCandidatesResult>(
+      'fetch_kinopoisk_candidates',
+      { keyword: primaryKeyword, typeParam },
+    );
+
+    if (firstResponse.status !== 'ok') {
+      return {
+        status: 'error',
+        message:
+          firstResponse.message?.trim() ||
+          'Источник просмотра временно недоступен.',
+        retryable: Boolean(firstResponse.retryable),
+      };
+    }
+
+    const firstCandidates = Array.isArray(firstResponse.items)
+      ? firstResponse.items
+      : [];
+    let matchResult = selectBestKinopoiskMatch(matchQuery, firstCandidates);
+
+    const shouldQueryOriginal =
+      matchResult.status !== 'matched' &&
+      Boolean(originalTitle) &&
+      originalTitle.toLowerCase() !== primaryKeyword.toLowerCase();
+
+    if (shouldQueryOriginal) {
+      const secondaryResponse = await invoke<TauriKinopoiskCandidatesResult>(
+        'fetch_kinopoisk_candidates',
+        { keyword: originalTitle, typeParam },
+      );
+
+      if (secondaryResponse.status === 'ok' && Array.isArray(secondaryResponse.items)) {
+        matchResult = selectBestKinopoiskMatch(matchQuery, [
+          ...firstCandidates,
+          ...secondaryResponse.items,
+        ]);
+      }
+    }
+
+    if (matchResult.status === 'matched') {
+      const verifiedUrl = buildKinokinoUrl(
+        matchResult.kinopoiskId,
+        matchResult.kinopoiskMediaType,
+      );
+      if (!verifiedUrl) {
+        return {
+          status: 'error',
+          message: 'Не удалось сформировать корректную ссылку на просмотр.',
+          retryable: true,
+        };
+      }
+
+      const record: KinopoiskCacheRecord = {
+        tmdb_id: params.tmdbId,
+        kinopoisk_id: matchResult.kinopoiskId,
+        media_type: matchResult.kinopoiskMediaType,
+        last_updated: new Date().toISOString().slice(0, 10),
+      };
+      if (isValidKinopoiskCacheRecord(record)) {
+        writeClientCacheRecord(cacheKey, record);
+      }
+
+      return {
+        status: 'matched',
+        kinopoiskId: matchResult.kinopoiskId,
+        kinopoiskMediaType: matchResult.kinopoiskMediaType,
+        url: verifiedUrl,
+        cached: false,
+      };
+    }
+
+    return {
+      status: matchResult.status,
+      message: matchResult.reason,
+    };
+  } catch {
+    return {
+      status: 'error',
+      message: 'Не удалось проверить доступность просмотра.',
+      retryable: true,
+    };
+  }
+}
+
 async function fetchResolutionFromBackend(
   params: ResolveWatchLinkParams,
   cacheKey: string,
 ): Promise<KinopoiskWatchResolution> {
+  if (isTauriRuntime()) {
+    return fetchResolutionViaTauri(params, cacheKey);
+  }
+
   try {
     const response = await fetch('/api/kinopoisk/resolve', {
       method: 'POST',
@@ -196,7 +322,10 @@ async function fetchResolutionFromBackend(
         typeof data.message === 'string' && data.message.trim()
           ? data.message
           : 'Источник просмотра временно недоступен.',
-      retryable: typeof data.retryable === 'boolean' ? data.retryable : response.status >= 500 || response.status === 429,
+      retryable:
+        typeof data.retryable === 'boolean'
+          ? data.retryable
+          : response.status >= 500 || response.status === 429,
     };
   } catch {
     return {

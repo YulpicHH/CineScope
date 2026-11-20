@@ -130,7 +130,7 @@ export function LibraryPage() {
       </div>
 
       {/* Вкладки и панель управления */}
-      <div className="flex flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white/85 p-4 backdrop-blur-md dark:border-white/[0.08] dark:bg-[#11151E]/85">
+      <div className="flex flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white p-4 dark:border-white/[0.08] dark:bg-[#11151E]">
         <div
           role="tablist"
           aria-label="Списки библиотеки"
@@ -287,6 +287,7 @@ export function LibraryPage() {
                       title={entry.title}
                       year={entry.year}
                       mediaType={entry.mediaType}
+                      variant="thumb"
                     />
                   </Link>
                   <div className="min-w-0 space-y-1">

@@ -1,0 +1,94 @@
+name: Build macOS (.dmg)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Тег релиза (например, v1.0.0; если пусто — будет использован v1.0.0-manual.<номер запуска>)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust stable (Apple Silicon aarch64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Ensure Tauri app icons exist
+        run: |
+          if [ ! -f src-tauri/icons/icon.icns ] || [ ! -f src-tauri/icons/128x128@2x.png ]; then
+            if [ -f assets/app-icon.png ]; then
+              npx tauri icon assets/app-icon.png
+            else
+              echo "Ошибка: не найден файл assets/app-icon.png для генерации иконок."
+              exit 1
+            fi
+          fi
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${{ github.event.inputs.release_tag }}" ]]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="v1.0.0-macos.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "name=CineScope ${TAG} (macOS Apple Silicon)" >> "$GITHUB_OUTPUT"
+
+      - name: Build macOS .dmg & publish to GitHub Releases
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_TMDB_API_KEY: ${{ secrets.VITE_TMDB_API_KEY }}
+          KINOPOISK_API_KEY: ${{ secrets.KINOPOISK_API_KEY }}
+        with:
+          tagName: ${{ steps.release_meta.outputs.tag }}
+          releaseName: ${{ steps.release_meta.outputs.name }}
+          releaseBody: |
+            ## CineScope для macOS (Apple Silicon / M1–M4)
+
+            Скачайте файл `.dmg` ниже из раздела **Assets**, откройте его и перетащите **CineScope.app** в папку **Applications**.
+
+            > **Первый запуск без Apple Developer сертификата:**
+            > Если macOS Gatekeeper покажет предупреждение о неподписанном приложении, выполните один раз в Терминале:
+            > ```bash
+            > xattr -cr /Applications/CineScope.app
+            > ```
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin

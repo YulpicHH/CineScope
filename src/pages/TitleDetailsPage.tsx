@@ -23,13 +23,15 @@ import {
   resolveWatchLink,
   type KinopoiskWatchResolution,
 } from '../services/kinopoisk';
-import { getTitleDetails, getTmdbImageUrl } from '../services/tmdb';
+import { getTitleDetails } from '../services/tmdb';
 import type { MediaType, TitleDetailsData } from '../types';
 import {
   formatRuntime,
   formatSeasonsCount,
   formatVoteCount,
 } from '../utils/formatters';
+import { buildProfileImageProps } from '../utils/imageUrl';
+import { isTauriRuntime, openExternalUrl } from '../utils/platform';
 
 type WatchResolutionState =
   | { status: 'idle' | 'loading' }
@@ -163,6 +165,7 @@ export function TitleDetailsPage() {
           <BackdropArtwork
             backdropPath={item.backdropPath}
             title={item.title}
+            priority
           />
           <div
             className="absolute inset-0 bg-gradient-to-t from-[#090B10] via-[#090B10]/85 to-[#090B10]/45"
@@ -178,6 +181,8 @@ export function TitleDetailsPage() {
                 title={item.title}
                 year={item.year}
                 mediaType={item.mediaType}
+                variant="detail"
+                priority
               />
             </div>
           </div>
@@ -283,6 +288,12 @@ export function TitleDetailsPage() {
                     target="_blank"
                     rel="noopener noreferrer"
                     data-testid="watch-kinokino-link"
+                    onClick={(event) => {
+                      if (isTauriRuntime()) {
+                        event.preventDefault();
+                        void openExternalUrl(watchState.url);
+                      }
+                    }}
                     className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
                   >
                     <Play className="h-4 w-4 fill-current" aria-hidden="true" />
@@ -416,19 +427,22 @@ export function TitleDetailsPage() {
           </h2>
           <div className="cinema-scroll -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
             {cast.map((person) => {
-              const photoUrl = getTmdbImageUrl(person.profilePath, 'w300');
+              const photoProps = buildProfileImageProps(person.profilePath);
               return (
                 <div
                   key={`${person.id}-${person.name}`}
                   className="w-32 shrink-0 space-y-2"
                 >
                   <div className="aspect-[3/4] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-white/[0.08] dark:bg-[#11151E]">
-                    {photoUrl ? (
+                    {photoProps ? (
                       <img
-                        src={photoUrl}
+                        src={photoProps.src}
+                        srcSet={photoProps.srcSet}
+                        sizes={photoProps.sizes}
                         alt={person.name}
                         referrerPolicy="no-referrer"
                         loading="lazy"
+                        decoding="async"
                         className="h-full w-full object-cover"
                       />
                     ) : (
@@ -469,6 +483,7 @@ export function TitleDetailsPage() {
               <iframe
                 src={`https://www.youtube.com/embed/${trailer.key}`}
                 title={trailer.name}
+                loading="lazy"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
                 className="h-full w-full border-0"

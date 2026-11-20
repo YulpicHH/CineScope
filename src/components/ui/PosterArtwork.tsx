@@ -1,13 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Film, Tv } from 'lucide-react';
-import { getTmdbImageUrl } from '../../services/tmdb';
 import type { MediaType } from '../../types';
+import {
+  buildBackdropImageProps,
+  buildPosterImageProps,
+  type PosterVariant,
+} from '../../utils/imageUrl';
 
 interface PosterArtworkProps {
   posterPath: string | null;
   title: string;
   year?: string;
   mediaType?: MediaType;
+  variant?: PosterVariant;
+  priority?: boolean;
   className?: string;
 }
 
@@ -31,18 +37,29 @@ export function PosterArtwork({
   title,
   year,
   mediaType = 'movie',
+  variant = 'card',
+  priority = false,
   className = '',
 }: PosterArtworkProps) {
   const [failed, setFailed] = useState(false);
-  const src = getTmdbImageUrl(posterPath, 'w500');
 
-  if (src && !failed) {
+  useEffect(() => {
+    setFailed(false);
+  }, [posterPath]);
+
+  const imgProps = buildPosterImageProps(posterPath, variant);
+
+  if (imgProps && !failed) {
     return (
       <img
-        src={src}
+        src={imgProps.src}
+        srcSet={imgProps.srcSet}
+        sizes={imgProps.sizes}
         alt={`Постер: ${title}`}
         referrerPolicy="no-referrer"
-        loading="lazy"
+        loading={priority ? 'eager' : 'lazy'}
+        decoding="async"
+        fetchPriority={priority ? 'high' : 'auto'}
         onError={() => setFailed(true)}
         className={`h-full w-full object-cover ${className}`}
       />
@@ -83,19 +100,35 @@ export function PosterArtwork({
 interface BackdropArtworkProps {
   backdropPath: string | null;
   title: string;
+  priority?: boolean;
   className?: string;
 }
 
-export function BackdropArtwork({ backdropPath, title, className = '' }: BackdropArtworkProps) {
+export function BackdropArtwork({
+  backdropPath,
+  title,
+  priority = false,
+  className = '',
+}: BackdropArtworkProps) {
   const [failed, setFailed] = useState(false);
-  const src = getTmdbImageUrl(backdropPath, 'w1280');
 
-  if (src && !failed) {
+  useEffect(() => {
+    setFailed(false);
+  }, [backdropPath]);
+
+  const imgProps = buildBackdropImageProps(backdropPath);
+
+  if (imgProps && !failed) {
     return (
       <img
-        src={src}
+        src={imgProps.src}
+        srcSet={imgProps.srcSet}
+        sizes={imgProps.sizes}
         alt={`Кадр из «${title}»`}
         referrerPolicy="no-referrer"
+        loading={priority ? 'eager' : 'lazy'}
+        decoding="async"
+        fetchPriority={priority ? 'high' : 'auto'}
         onError={() => setFailed(true)}
         className={`h-full w-full object-cover ${className}`}
       />

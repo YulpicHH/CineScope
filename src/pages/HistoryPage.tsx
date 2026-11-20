@@ -94,6 +94,7 @@ export function HistoryPage() {
                     title={item.title}
                     year={item.year}
                     mediaType={item.mediaType}
+                    variant="thumb"
                   />
                 </Link>
 

@@ -109,7 +109,7 @@ export function MoodPage() {
       {/* Карточки настроений */}
       <section
         aria-label="Выбор настроения"
-        className="space-y-4 rounded-2xl border border-slate-200/80 bg-white/85 p-5 backdrop-blur-md dark:border-white/[0.08] dark:bg-[#11151E]/85"
+        className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-5 dark:border-white/[0.08] dark:bg-[#11151E]"
       >
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-display text-base font-semibold text-slate-950 dark:text-white">
@@ -333,6 +333,7 @@ export function MoodPage() {
                       title={item.title}
                       year={item.year}
                       mediaType={item.mediaType}
+                      variant="thumb"
                       className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
                   </Link>

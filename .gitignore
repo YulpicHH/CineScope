@@ -9,6 +9,9 @@ node_modules/
 # Build output
 dist/
 build/
+.cache/
+src-tauri/target/
+src-tauri/gen/
 
 # System files
 .DS_Store

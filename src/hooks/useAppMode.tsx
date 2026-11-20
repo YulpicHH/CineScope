@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { hasTmdbKey } from '../services/tmdb';
 
 const DEMO_STORAGE_KEY = 'cinescope_demo_mode';
@@ -50,16 +50,19 @@ export function AppModeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const value = useMemo<AppModeContextValue>(
+    () => ({
+      hasApiKey,
+      isDemoMode,
+      needsSetup,
+      enterDemoMode,
+      exitDemoMode,
+    }),
+    [hasApiKey, isDemoMode, needsSetup, enterDemoMode, exitDemoMode],
+  );
+
   return (
-    <AppModeContext.Provider
-      value={{
-        hasApiKey,
-        isDemoMode,
-        needsSetup,
-        enterDemoMode,
-        exitDemoMode,
-      }}
-    >
+    <AppModeContext.Provider value={value}>
       {children}
     </AppModeContext.Provider>
   );

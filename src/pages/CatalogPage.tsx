@@ -79,7 +79,7 @@ export function CatalogPage() {
   }, [filters.mediaType, isDemoMode]);
 
   const loadPage = useCallback(
-    async (targetPage: number, append: boolean) => {
+    async (targetPage: number, append: boolean, signal?: AbortSignal) => {
       if (append) setLoadingMore(true);
       else setLoading(true);
       setError(null);
@@ -92,20 +92,29 @@ export function CatalogPage() {
           },
           targetPage,
           isDemoMode,
+          signal,
         );
+
+        if (signal?.aborted) return;
 
         setItems((prev) => (append ? [...prev, ...result.items] : result.items));
         setPage(result.page);
         setTotalPages(result.totalPages);
       } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+        if (signal?.aborted) return;
         setError(
           err instanceof Error
             ? err.message
             : 'Ошибка при загрузке каталога.',
         );
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (!signal?.aborted) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [
@@ -120,7 +129,11 @@ export function CatalogPage() {
   );
 
   useEffect(() => {
-    void loadPage(1, false);
+    const controller = new AbortController();
+    void loadPage(1, false, controller.signal);
+    return () => {
+      controller.abort();
+    };
   }, [loadPage]);
 
   const handleFiltersChange = (next: CatalogFilters) => {

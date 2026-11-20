@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { Bookmark, Check, Heart, Star } from 'lucide-react';
 import { useLibrary } from '../../hooks/useLibrary';
@@ -9,7 +10,7 @@ interface MediaCardProps {
   compact?: boolean;
 }
 
-export function MediaCard({ item, compact = false }: MediaCardProps) {
+export const MediaCard = memo(function MediaCard({ item, compact = false }: MediaCardProps) {
   const { getEntry, toggleWatchlist, toggleFavorite } = useLibrary();
   const entry = getEntry(item.id, item.mediaType);
 
@@ -27,7 +28,7 @@ export function MediaCard({ item, compact = false }: MediaCardProps) {
 
   return (
     <article
-      className={`group relative flex flex-col ${
+      className={`media-card-contain group relative flex flex-col ${
         compact ? 'w-[162px] shrink-0 sm:w-[186px]' : 'w-full'
       }`}
     >
@@ -41,11 +42,12 @@ export function MediaCard({ item, compact = false }: MediaCardProps) {
             title={item.title}
             year={item.year}
             mediaType={item.mediaType}
+            variant="card"
             className="transition-transform duration-200 ease-out group-hover:scale-[1.03]"
           />
         </Link>
 
-        {/* Быстрые действия на карточке */}
+        {/* Быстрые действия на карточке (без backdrop-blur для плавного скролла в WKWebView) */}
         <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5 opacity-100 transition-opacity duration-150 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
           <button
             type="button"
@@ -56,12 +58,12 @@ export function MediaCard({ item, compact = false }: MediaCardProps) {
                 : `Добавить «${item.title}» в список «Посмотреть позже»`
             }
             title={isWatchlist ? 'В списке «Посмотреть позже»' : 'Посмотреть позже'}
-            className={`flex h-8 w-8 items-center justify-center rounded-lg border backdrop-blur-md transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
+            className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
               isWatchlist
                 ? 'border-blue-400/50 bg-blue-600 text-white'
                 : isWatched
                   ? 'border-emerald-400/50 bg-emerald-600 text-white'
-                  : 'border-white/20 bg-black/65 text-white hover:bg-black/85'
+                  : 'border-white/20 bg-black/75 text-white hover:bg-black/90'
             }`}
           >
             {isWatched ? (
@@ -84,10 +86,10 @@ export function MediaCard({ item, compact = false }: MediaCardProps) {
                 : `Добавить «${item.title}» в избранное`
             }
             title={isFavorite ? 'В избранном' : 'В избранное'}
-            className={`flex h-8 w-8 items-center justify-center rounded-lg border backdrop-blur-md transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
+            className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
               isFavorite
                 ? 'border-violet-400/50 bg-violet-600 text-white'
-                : 'border-white/20 bg-black/65 text-white hover:bg-black/85'
+                : 'border-white/20 bg-black/75 text-white hover:bg-black/90'
             }`}
           >
             <Heart
@@ -123,4 +125,4 @@ export function MediaCard({ item, compact = false }: MediaCardProps) {
       </div>
     </article>
   );
-}
+});

@@ -61,7 +61,7 @@ export function CatalogFilterBar({
   return (
     <section
       aria-label="Фильтры и поиск каталога"
-      className="space-y-4 rounded-2xl border border-slate-200/80 bg-white/85 p-4 backdrop-blur-md dark:border-white/[0.08] dark:bg-[#11151E]/85 sm:p-5"
+      className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-4 dark:border-white/[0.08] dark:bg-[#11151E] sm:p-5"
     >
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         {/* Переключатель Фильмы / Сериалы */}

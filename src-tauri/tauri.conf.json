@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CineScope",
+  "version": "1.0.0",
+  "identifier": "com.yulpichh.cinescope",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "CineScope",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 640,
+        "center": true,
+        "maximized": true,
+        "resizable": true,
+        "fullscreen": false,
+        "theme": "Dark",
+        "backgroundColor": "#090B10",
+        "titleBarStyle": "Transparent"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' tauri: asset: http://asset.localhost https://asset.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost https://image.tmdb.org https://i.ytimg.com; connect-src 'self' ipc: http://ipc.localhost https://api.themoviedb.org https://kinopoiskapiunofficial.tech; frame-src https://www.youtube.com https://www.youtube-nocookie.com; media-src 'self' blob: https://www.youtube.com; object-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "category": "Entertainment",
+    "shortDescription": "Поиск фильмов и сериалов по настроению",
+    "longDescription": "Персональная платформа для поиска фильмов и сериалов с каталогом, личной библиотекой, историей просмотров и подбором по настроению.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": null,
+      "dmg": {
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        },
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        }
+      }
+    }
+  }
+}

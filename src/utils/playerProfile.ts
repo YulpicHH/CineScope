@@ -1,90 +1,92 @@
-export type PlayerProfileId = 'firefox_4k' | 'chrome_4k' | 'safari_native';
+export type PlayerModeId = 'firefox_window' | 'embedded_webkit';
 
-export const DEFAULT_PLAYER_PROFILE: PlayerProfileId = 'firefox_4k';
+export const DEFAULT_PLAYER_MODE: PlayerModeId = 'firefox_window';
 
-export interface PlayerProfileOption {
-  id: PlayerProfileId;
+export interface PlayerModeOption {
+  id: PlayerModeId;
   label: string;
-  shortLabel: string;
+  badge: string;
   description: string;
 }
 
-export const PLAYER_PROFILE_OPTIONS: readonly PlayerProfileOption[] = [
+export const PLAYER_MODE_OPTIONS: readonly PlayerModeOption[] = [
   {
-    id: 'firefox_4k',
-    label: 'Firefox · 4K / MSE',
-    shortLabel: 'Firefox (4K)',
+    id: 'firefox_window',
+    label: 'Окно Firefox',
+    badge: '4K',
     description:
-      'Десктопный профиль Firefox с приоритетом MediaSource (hls.js) — открывает выбор 4K (2160p) в большинстве балансеров.',
+      'Отдельное чистое окно Firefox без вкладок и адресной строки в изолированном профиле CineScope — поддерживает 4K (2160p) и не затрагивает ваш обычный Firefox.',
   },
   {
-    id: 'chrome_4k',
-    label: 'Chrome · 4K / MSE',
-    shortLabel: 'Chrome (4K)',
+    id: 'embedded_webkit',
+    label: 'Встроенное окно',
+    badge: 'до 1080p',
     description:
-      'Десктопный профиль Chromium с приоритетом MediaSource — запасной режим для плееров, настроенных под Chrome.',
-  },
-  {
-    id: 'safari_native',
-    label: 'Safari · Нативный HEVC',
-    shortLabel: 'Safari (HEVC)',
-    description:
-      'Полноценный десктопный Safari 18 без изменения HLS — для источников с нативным Apple HEVC-потоком.',
+      'Открывается прямо внутри CineScope на системном движке macOS WebKit без запуска Firefox (качество зависит от поддержки WebKit на сайте).',
   },
 ] as const;
 
-const VALID_PROFILE_IDS = new Set<string>(
-  PLAYER_PROFILE_OPTIONS.map((option) => option.id),
-);
-
-export function normalizePlayerProfile(value: unknown): PlayerProfileId {
+export function normalizePlayerMode(value: unknown): PlayerModeId {
   if (typeof value === 'string') {
     const trimmed = value.trim();
-    if (VALID_PROFILE_IDS.has(trimmed)) {
-      return trimmed as PlayerProfileId;
+    if (trimmed === 'firefox_window' || trimmed === 'embedded_webkit') {
+      return trimmed;
+    }
+    // Миграция со старых идентификаторов профилей WebKit
+    if (trimmed === 'safari_native') {
+      return 'embedded_webkit';
+    }
+    if (trimmed === 'firefox_4k' || trimmed === 'chrome_4k') {
+      return 'firefox_window';
     }
   }
-  return DEFAULT_PLAYER_PROFILE;
+  return DEFAULT_PLAYER_MODE;
 }
 
-export function parseStoredPlayerProfile(raw: string | null): PlayerProfileId {
-  if (!raw) return DEFAULT_PLAYER_PROFILE;
+export function parseStoredPlayerMode(raw: string | null): PlayerModeId {
+  if (!raw) return DEFAULT_PLAYER_MODE;
   const trimmed = raw.trim();
-  if (!trimmed) return DEFAULT_PLAYER_PROFILE;
+  if (!trimmed) return DEFAULT_PLAYER_MODE;
 
-  if (VALID_PROFILE_IDS.has(trimmed)) {
-    return trimmed as PlayerProfileId;
+  if (
+    trimmed === 'firefox_window' ||
+    trimmed === 'embedded_webkit' ||
+    trimmed === 'safari_native' ||
+    trimmed === 'firefox_4k' ||
+    trimmed === 'chrome_4k'
+  ) {
+    return normalizePlayerMode(trimmed);
   }
 
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (typeof parsed === 'string') {
-      return normalizePlayerProfile(parsed);
+      return normalizePlayerMode(parsed);
     }
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'profile' in parsed
-    ) {
-      return normalizePlayerProfile((parsed as { profile?: unknown }).profile);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const record = parsed as { mode?: unknown; profile?: unknown };
+      if ('mode' in record) {
+        return normalizePlayerMode(record.mode);
+      }
+      if ('profile' in record) {
+        return normalizePlayerMode(record.profile);
+      }
     }
   } catch {
-    // Повреждённое значение в хранилище — возвращаем профиль по умолчанию
+    // Повреждённое значение в хранилище — возвращаем режим по умолчанию
   }
 
-  return DEFAULT_PLAYER_PROFILE;
+  return DEFAULT_PLAYER_MODE;
 }
 
-export function serializePlayerProfile(profile: PlayerProfileId): string {
-  return JSON.stringify({ profile: normalizePlayerProfile(profile) });
+export function serializePlayerMode(mode: PlayerModeId): string {
+  return JSON.stringify({ mode: normalizePlayerMode(mode) });
 }
 
-export function getPlayerProfileOption(
-  profile: PlayerProfileId,
-): PlayerProfileOption {
-  const normalized = normalizePlayerProfile(profile);
+export function getPlayerModeOption(mode: PlayerModeId): PlayerModeOption {
+  const normalized = normalizePlayerMode(mode);
   return (
-    PLAYER_PROFILE_OPTIONS.find((option) => option.id === normalized) ??
-    PLAYER_PROFILE_OPTIONS[0]
+    PLAYER_MODE_OPTIONS.find((option) => option.id === normalized) ??
+    PLAYER_MODE_OPTIONS[0]
   );
 }

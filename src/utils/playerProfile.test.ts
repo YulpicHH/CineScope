@@ -1,46 +1,58 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DEFAULT_PLAYER_PROFILE,
-  PLAYER_PROFILE_OPTIONS,
-  getPlayerProfileOption,
-  normalizePlayerProfile,
-  parseStoredPlayerProfile,
-  serializePlayerProfile,
+  DEFAULT_PLAYER_MODE,
+  PLAYER_MODE_OPTIONS,
+  getPlayerModeOption,
+  normalizePlayerMode,
+  parseStoredPlayerMode,
+  serializePlayerMode,
 } from './playerProfile';
 
-test('normalizePlayerProfile accepts valid profile IDs and falls back to firefox_4k', () => {
-  assert.equal(normalizePlayerProfile('firefox_4k'), 'firefox_4k');
-  assert.equal(normalizePlayerProfile('chrome_4k'), 'chrome_4k');
-  assert.equal(normalizePlayerProfile('safari_native'), 'safari_native');
-  assert.equal(normalizePlayerProfile('  chrome_4k  '), 'chrome_4k');
-  assert.equal(normalizePlayerProfile('unknown'), DEFAULT_PLAYER_PROFILE);
-  assert.equal(normalizePlayerProfile(null), DEFAULT_PLAYER_PROFILE);
-  assert.equal(normalizePlayerProfile(123), DEFAULT_PLAYER_PROFILE);
+test('normalizePlayerMode accepts valid modes, migrates legacy profiles, and defaults to firefox_window', () => {
+  assert.equal(normalizePlayerMode('firefox_window'), 'firefox_window');
+  assert.equal(normalizePlayerMode('embedded_webkit'), 'embedded_webkit');
+  assert.equal(normalizePlayerMode('  embedded_webkit  '), 'embedded_webkit');
+  assert.equal(normalizePlayerMode('firefox_4k'), 'firefox_window');
+  assert.equal(normalizePlayerMode('chrome_4k'), 'firefox_window');
+  assert.equal(normalizePlayerMode('safari_native'), 'embedded_webkit');
+  assert.equal(normalizePlayerMode('unknown'), DEFAULT_PLAYER_MODE);
+  assert.equal(normalizePlayerMode(null), DEFAULT_PLAYER_MODE);
+  assert.equal(normalizePlayerMode(42), DEFAULT_PLAYER_MODE);
 });
 
-test('parseStoredPlayerProfile and serializePlayerProfile round-trip safely and handle corrupted data', () => {
-  for (const option of PLAYER_PROFILE_OPTIONS) {
-    const serialized = serializePlayerProfile(option.id);
-    assert.equal(parseStoredPlayerProfile(serialized), option.id);
+test('parseStoredPlayerMode and serializePlayerMode round-trip safely and migrate legacy storage payloads', () => {
+  for (const option of PLAYER_MODE_OPTIONS) {
+    const serialized = serializePlayerMode(option.id);
+    assert.equal(parseStoredPlayerMode(serialized), option.id);
   }
 
-  assert.equal(parseStoredPlayerProfile('safari_native'), 'safari_native');
-  assert.equal(parseStoredPlayerProfile(JSON.stringify('chrome_4k')), 'chrome_4k');
-  assert.equal(parseStoredPlayerProfile(null), DEFAULT_PLAYER_PROFILE);
-  assert.equal(parseStoredPlayerProfile(''), DEFAULT_PLAYER_PROFILE);
-  assert.equal(parseStoredPlayerProfile('{broken-json'), DEFAULT_PLAYER_PROFILE);
+  assert.equal(parseStoredPlayerMode('embedded_webkit'), 'embedded_webkit');
   assert.equal(
-    parseStoredPlayerProfile(JSON.stringify({ profile: 'invalid_mode' })),
-    DEFAULT_PLAYER_PROFILE,
+    parseStoredPlayerMode(JSON.stringify({ profile: 'safari_native' })),
+    'embedded_webkit',
+  );
+  assert.equal(
+    parseStoredPlayerMode(JSON.stringify({ profile: 'firefox_4k' })),
+    'firefox_window',
+  );
+  assert.equal(parseStoredPlayerMode(null), DEFAULT_PLAYER_MODE);
+  assert.equal(parseStoredPlayerMode(''), DEFAULT_PLAYER_MODE);
+  assert.equal(parseStoredPlayerMode('{broken-json'), DEFAULT_PLAYER_MODE);
+  assert.equal(
+    parseStoredPlayerMode(JSON.stringify({ mode: 'invalid' })),
+    DEFAULT_PLAYER_MODE,
   );
 });
 
-test('getPlayerProfileOption returns matching metadata for every profile', () => {
-  const safari = getPlayerProfileOption('safari_native');
-  assert.equal(safari.id, 'safari_native');
-  assert.match(safari.label, /Safari/);
+test('getPlayerModeOption returns matching metadata for every player mode', () => {
+  const firefox = getPlayerModeOption('firefox_window');
+  assert.equal(firefox.id, 'firefox_window');
+  assert.equal(firefox.badge, '4K');
 
-  const fallback = getPlayerProfileOption('bad' as never);
-  assert.equal(fallback.id, DEFAULT_PLAYER_PROFILE);
+  const embedded = getPlayerModeOption('embedded_webkit');
+  assert.equal(embedded.id, 'embedded_webkit');
+
+  const fallback = getPlayerModeOption('bad' as never);
+  assert.equal(fallback.id, DEFAULT_PLAYER_MODE);
 });

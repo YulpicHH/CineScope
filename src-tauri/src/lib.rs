@@ -1,4 +1,11 @@
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
+use std::fs;
+#[cfg(target_os = "macos")]
+use std::path::{Path, PathBuf};
+use std::process::Child;
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 #[cfg(desktop)]
@@ -9,14 +16,9 @@ use tauri_plugin_http::reqwest;
 const KINOPOISK_API_URL: &str = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
 const PLAYER_WINDOW_LABEL: &str = "player";
 
-const PROFILE_FIREFOX_4K: &str = "firefox_4k";
-const PROFILE_CHROME_4K: &str = "chrome_4k";
-const PROFILE_SAFARI_NATIVE: &str = "safari_native";
+const PLAYER_MODE_FIREFOX: &str = "firefox_window";
+const PLAYER_MODE_EMBEDDED: &str = "embedded_webkit";
 
-const UA_DESKTOP_FIREFOX_MACOS: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:136.0) Gecko/20100101 Firefox/136.0";
-const UA_DESKTOP_CHROME_MACOS: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 const UA_DESKTOP_SAFARI_MACOS: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
 
@@ -70,115 +72,75 @@ const PLAYER_POPUP_BLOCK_SCRIPT: &str = r#"
 })();
 "#;
 
-const PLAYER_MSE_HLS_HINT_SCRIPT: &str = r#"
-(() => {
-  if (window.__cinescopeMseHintInstalled) return;
-  window.__cinescopeMseHintInstalled = true;
-
-  try {
-    const MS = window.MediaSource || window.ManagedMediaSource;
-    if (!MS || typeof MS.isTypeSupported !== 'function') return;
-    if (!MS.isTypeSupported('video/mp4; codecs="avc1.42E01E,mp4a.40.2"')) return;
-
-    const proto = window.HTMLMediaElement && window.HTMLMediaElement.prototype;
-    if (!proto || typeof proto.canPlayType !== 'function') return;
-
-    const originalCanPlayType = proto.canPlayType;
-    proto.canPlayType = function (mimeType) {
-      if (typeof mimeType === 'string') {
-        const lower = mimeType.toLowerCase();
-        if (
-          lower.includes('application/vnd.apple.mpegurl') ||
-          lower.includes('application/x-mpegurl') ||
-          lower.includes('audio/mpegurl') ||
-          lower.includes('audio/x-mpegurl')
-        ) {
-          return '';
-        }
-      }
-      return originalCanPlayType.call(this, mimeType);
-    };
-  } catch {
-    // Оставляем стандартное поведение браузера, если переопределение недоступно
-  }
-})();
+#[cfg(target_os = "macos")]
+const FIREFOX_USER_JS: &str = r#"
+// CineScope isolated cinema player profile
+user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
+user_pref("browser.tabs.inTitlebar", 0);
+user_pref("ui.systemUsesDarkTheme", 1);
+user_pref("layout.css.prefers-color-scheme.content-override", 0);
+user_pref("extensions.activeThemeID", "firefox-compact-dark@mozilla.org");
+user_pref("browser.tabs.warnOnClose", false);
+user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("browser.aboutwelcome.enabled", false);
+user_pref("trailhead.firstrun.didSeeAboutWelcome", true);
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("browser.startup.page", 0);
+user_pref("browser.startup.homepage", "about:blank");
+user_pref("datareporting.policy.firstRunURL", "");
+user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
+user_pref("browser.rights.3.shown", true);
+user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("browser.sessionstore.max_tabs_undo", 0);
+user_pref("browser.sessionstore.max_windows_undo", 0);
+user_pref("dom.disable_open_during_load", true);
+user_pref("dom.popup_maximum", 0);
+user_pref("dom.popup_allowed_events", "");
+user_pref("browser.link.open_newwindow", 1);
+user_pref("browser.link.open_newwindow.restriction", 0);
+user_pref("full-screen-api.warning.timeout", 0);
+user_pref("full-screen-api.warning.delay", 0);
+user_pref("media.hardware-video-decoding.enabled", true);
+user_pref("media.av1.enabled", true);
+user_pref("media.mediasource.enabled", true);
+user_pref("media.mediasource.vp9.enabled", true);
+user_pref("media.mediasource.webm.enabled", true);
 "#;
 
-const PLAYER_VENDOR_FIREFOX_SCRIPT: &str = r#"
-(() => {
-  try {
-    Object.defineProperty(Navigator.prototype, 'vendor', {
-      configurable: true,
-      get: () => '',
-    });
-  } catch {
-    // Игнорируем, если свойство защищено
-  }
-})();
+#[cfg(target_os = "macos")]
+const FIREFOX_USER_CHROME_CSS: &str = r#"
+/* CineScope clean cinema window: hide tabs, address bar, bookmarks, sidebars */
+#TabsToolbar,
+#nav-bar,
+#PersonalToolbar,
+#sidebar-box,
+#sidebar-splitter,
+#statuspanel {
+  visibility: collapse !important;
+  display: none !important;
+}
+
+#navigator-toolbox {
+  min-height: 0 !important;
+  height: 0 !important;
+  border: none !important;
+  background-color: #090B10 !important;
+}
+
+#main-window,
+#tabbrowser-tabbox,
+#tabbrowser-tabpanels,
+browser {
+  background-color: #090B10 !important;
+}
 "#;
-
-const PLAYER_VENDOR_CHROME_SCRIPT: &str = r#"
-(() => {
-  try {
-    Object.defineProperty(Navigator.prototype, 'vendor', {
-      configurable: true,
-      get: () => 'Google Inc.',
-    });
-  } catch {
-    // Игнорируем, если свойство защищено
-  }
-})();
-"#;
-
-struct PlayerProfileConfig {
-    id: &'static str,
-    user_agent: &'static str,
-    mse_hls_hint: bool,
-    vendor_script: Option<&'static str>,
-}
-
-fn resolve_player_profile(raw: Option<&str>) -> PlayerProfileConfig {
-    match raw.map(str::trim) {
-        Some(PROFILE_CHROME_4K) => PlayerProfileConfig {
-            id: PROFILE_CHROME_4K,
-            user_agent: UA_DESKTOP_CHROME_MACOS,
-            mse_hls_hint: true,
-            vendor_script: Some(PLAYER_VENDOR_CHROME_SCRIPT),
-        },
-        Some(PROFILE_SAFARI_NATIVE) => PlayerProfileConfig {
-            id: PROFILE_SAFARI_NATIVE,
-            user_agent: UA_DESKTOP_SAFARI_MACOS,
-            mse_hls_hint: false,
-            vendor_script: None,
-        },
-        _ => PlayerProfileConfig {
-            id: PROFILE_FIREFOX_4K,
-            user_agent: UA_DESKTOP_FIREFOX_MACOS,
-            mse_hls_hint: true,
-            vendor_script: Some(PLAYER_VENDOR_FIREFOX_SCRIPT),
-        },
-    }
-}
-
-fn build_player_init_script(config: &PlayerProfileConfig) -> String {
-    let mut script = String::from(PLAYER_POPUP_BLOCK_SCRIPT);
-    if let Some(vendor_script) = config.vendor_script {
-        script.push('\n');
-        script.push_str(vendor_script);
-    }
-    if config.mse_hls_hint {
-        script.push('\n');
-        script.push_str(PLAYER_MSE_HLS_HINT_SCRIPT);
-    }
-    script
-}
 
 struct HttpClientState {
     client: reqwest::Client,
 }
 
 struct PlayerWindowState {
-    active_profile: Mutex<Option<String>>,
+    firefox_child: Mutex<Option<Child>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -211,6 +173,98 @@ pub struct KinopoiskCandidatesResult {
     pub code: Option<String>,
     pub message: Option<String>,
     pub retryable: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn find_firefox_executable() -> Option<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from("/Applications/Firefox.app/Contents/MacOS/firefox"),
+        PathBuf::from("/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox"),
+        PathBuf::from("/Applications/Firefox Nightly.app/Contents/MacOS/firefox"),
+    ];
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home_apps = PathBuf::from(home).join("Applications");
+        candidates.insert(1, home_apps.join("Firefox.app/Contents/MacOS/firefox"));
+        candidates.push(
+            home_apps.join("Firefox Developer Edition.app/Contents/MacOS/firefox"),
+        );
+        candidates.push(home_apps.join("Firefox Nightly.app/Contents/MacOS/firefox"));
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_firefox_player_profile(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Не удалось получить каталог данных CineScope: {}", err))?;
+    let profile_dir = base_dir.join("firefox-player-profile");
+    let chrome_dir = profile_dir.join("chrome");
+
+    fs::create_dir_all(&chrome_dir)
+        .map_err(|err| format!("Не удалось подготовить профиль плеера Firefox: {}", err))?;
+
+    fs::write(profile_dir.join("user.js"), FIREFOX_USER_JS)
+        .map_err(|err| format!("Не удалось записать настройки профиля Firefox: {}", err))?;
+    fs::write(chrome_dir.join("userChrome.css"), FIREFOX_USER_CHROME_CSS)
+        .map_err(|err| format!("Не удалось записать стили окна Firefox: {}", err))?;
+
+    cleanup_firefox_session_artifacts(&profile_dir);
+
+    Ok(profile_dir)
+}
+
+#[cfg(target_os = "macos")]
+fn cleanup_firefox_session_artifacts(profile_dir: &Path) {
+    let files_to_remove = [
+        "sessionstore.jsonlz4",
+        "sessionCheckpoints.json",
+        ".parentlock",
+        "parent.lock",
+    ];
+    for file_name in files_to_remove {
+        let _ = fs::remove_file(profile_dir.join(file_name));
+    }
+    let _ = fs::remove_dir_all(profile_dir.join("sessionstore-backups"));
+}
+
+fn terminate_firefox_player(player_state: &PlayerWindowState) {
+    let existing_child = match player_state.firefox_child.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => None,
+    };
+
+    if let Some(mut child) = existing_child {
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
+fn normalize_player_mode(raw: Option<&str>) -> &'static str {
+    match raw.map(str::trim) {
+        Some(PLAYER_MODE_EMBEDDED) | Some("safari_native") => PLAYER_MODE_EMBEDDED,
+        _ => PLAYER_MODE_FIREFOX,
+    }
+}
+
+#[tauri::command]
+fn check_firefox_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        find_firefox_executable().is_some()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 #[tauri::command]
@@ -336,7 +390,7 @@ async fn open_watch_window(
     app: tauri::AppHandle,
     url: String,
     title: String,
-    player_profile: Option<String>,
+    player_mode: Option<String>,
     player_state: State<'_, PlayerWindowState>,
 ) -> Result<(), String> {
     let trimmed_url = url.trim();
@@ -350,7 +404,47 @@ async fn open_watch_window(
         }
     }
 
-    let profile_config = resolve_player_profile(player_profile.as_deref());
+    let resolved_mode = normalize_player_mode(player_mode.as_deref());
+
+    #[cfg(target_os = "macos")]
+    if resolved_mode == PLAYER_MODE_FIREFOX {
+        if let Some(firefox_path) = find_firefox_executable() {
+            if let Some(existing_window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
+                let _ = existing_window.destroy();
+            }
+
+            terminate_firefox_player(&player_state);
+
+            let profile_dir = prepare_firefox_player_profile(&app)?;
+            let child = Command::new(&firefox_path)
+                .arg("-profile")
+                .arg(&profile_dir)
+                .arg("--no-remote")
+                .arg("--new-instance")
+                .arg("-width")
+                .arg("1366")
+                .arg("-height")
+                .arg("820")
+                .arg(parsed_url.as_str())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|err| format!("Не удалось запустить чистое окно Firefox: {}", err))?;
+
+            if let Ok(mut guard) = player_state.firefox_child.lock() {
+                *guard = Some(child);
+            }
+
+            return Ok(());
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = resolved_mode;
+
+    // Встроенное окно CineScope (WebKit) — выбранный режим или автоматический фоллбэк
+    terminate_firefox_player(&player_state);
 
     #[cfg(desktop)]
     let window_title = {
@@ -365,51 +459,28 @@ async fn open_watch_window(
     let _ = title;
 
     if let Some(existing_window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
-        let same_profile = player_state
-            .active_profile
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .as_deref()
-            == Some(profile_config.id);
-
-        if same_profile {
-            existing_window
-                .navigate(parsed_url)
-                .map_err(|err| format!("Не удалось открыть ссылку в окне плеера: {}", err))?;
-
-            #[cfg(desktop)]
-            {
-                let _ = existing_window.set_title(window_title.as_str());
-                let _ = existing_window.unminimize();
-                let _ = existing_window.show();
-                let _ = existing_window.set_focus();
-            }
-
-            return Ok(());
-        }
+        existing_window
+            .navigate(parsed_url)
+            .map_err(|err| format!("Не удалось открыть ссылку в окне плеера: {}", err))?;
 
         #[cfg(desktop)]
         {
-            let _ = existing_window.destroy();
-            for _ in 0..20 {
-                if app.get_webview_window(PLAYER_WINDOW_LABEL).is_none() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
+            let _ = existing_window.set_title(window_title.as_str());
+            let _ = existing_window.unminimize();
+            let _ = existing_window.show();
+            let _ = existing_window.set_focus();
         }
-    }
 
-    let init_script = build_player_init_script(&profile_config);
+        return Ok(());
+    }
 
     let builder = WebviewWindowBuilder::new(
         &app,
         PLAYER_WINDOW_LABEL,
         WebviewUrl::External(parsed_url),
     )
-    .user_agent(profile_config.user_agent)
-    .initialization_script_for_all_frames(init_script);
+    .user_agent(UA_DESKTOP_SAFARI_MACOS)
+    .initialization_script_for_all_frames(PLAYER_POPUP_BLOCK_SCRIPT);
 
     #[cfg(desktop)]
     let builder = builder
@@ -426,10 +497,6 @@ async fn open_watch_window(
         .build()
         .map_err(|err| format!("Не удалось создать окно плеера: {}", err))?;
 
-    if let Ok(mut guard) = player_state.active_profile.lock() {
-        *guard = Some(profile_config.id.to_string());
-    }
-
     Ok(())
 }
 
@@ -443,13 +510,14 @@ pub fn run() {
     tauri::Builder::default()
         .manage(HttpClientState { client })
         .manage(PlayerWindowState {
-            active_profile: Mutex::new(None),
+            firefox_child: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             fetch_kinopoisk_candidates,
-            open_watch_window
+            open_watch_window,
+            check_firefox_available
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineScope application");

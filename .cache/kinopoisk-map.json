@@ -1,0 +1,26 @@
+{
+  "movie:550": {
+    "tmdb_id": 550,
+    "kinopoisk_id": 361,
+    "media_type": "movie",
+    "last_updated": "2026-11-20"
+  },
+  "movie:496243": {
+    "tmdb_id": 496243,
+    "kinopoisk_id": 1043758,
+    "media_type": "movie",
+    "last_updated": "2026-11-20"
+  },
+  "tv:19885": {
+    "tmdb_id": 19885,
+    "kinopoisk_id": 502838,
+    "media_type": "series",
+    "last_updated": "2026-11-20"
+  },
+  "tv:1396": {
+    "tmdb_id": 1396,
+    "kinopoisk_id": 404900,
+    "media_type": "series",
+    "last_updated": "2026-11-20"
+  }
+}

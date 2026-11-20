@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CineScope — Поиск фильмов и сериалов по настроению</title>
+    <meta
+      name="description"
+      content="Персональная платформа для поиска фильмов и сериалов с каталогом, личной библиотекой, историей просмотров и AI-подбором по настроению."
+    />
+    <meta property="og:title" content="CineScope — Поиск фильмов и сериалов по настроению" />
+    <meta
+      property="og:description"
+      content="Персональная платформа для поиска фильмов и сериалов с каталогом, личной библиотекой, историей просмотров и AI-подбором по настроению."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('cinescope_theme');
+          var isDark = saved ? saved === 'dark' : true;
+          document.documentElement.classList.toggle('dark', isDark);
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+  </head>
+  <body class="bg-[#F6F7FA] text-[#0F172A] dark:bg-[#090B10] dark:text-[#F3F5F9] antialiased selection:bg-blue-500/30 selection:text-blue-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

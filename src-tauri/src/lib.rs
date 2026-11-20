@@ -41,20 +41,11 @@ pub struct KinopoiskCandidatesResult {
     pub retryable: bool,
 }
 
-fn resolve_kinopoisk_api_key() -> Option<String> {
-    let runtime_key = std::env::var("KINOPOISK_API_KEY").ok();
-    let compile_time_key = option_env!("KINOPOISK_API_KEY").map(str::to_string);
-
-    runtime_key
-        .or(compile_time_key)
-        .map(|key| key.trim().to_string())
-        .filter(|key| !key.is_empty() && key != "MY_KINOPOISK_API_KEY")
-}
-
 #[tauri::command]
 async fn fetch_kinopoisk_candidates(
     keyword: String,
     type_param: String,
+    api_key: String,
     http_state: State<'_, HttpClientState>,
 ) -> Result<KinopoiskCandidatesResult, String> {
     let trimmed_keyword = keyword.trim();
@@ -68,20 +59,19 @@ async fn fetch_kinopoisk_candidates(
         });
     }
 
-    let api_key = match resolve_kinopoisk_api_key() {
-        Some(key) => key,
-        None => {
-            return Ok(KinopoiskCandidatesResult {
-                status: "error".to_string(),
-                items: Vec::new(),
-                code: Some("NOT_CONFIGURED".to_string()),
-                message: Some(
-                    "Ключ Kinopoisk Unofficial API не задан при сборке приложения.".to_string(),
-                ),
-                retryable: false,
-            });
-        }
-    };
+    let trimmed_api_key = api_key.trim();
+    if trimmed_api_key.is_empty() || trimmed_api_key == "MY_KINOPOISK_API_KEY" {
+        return Ok(KinopoiskCandidatesResult {
+            status: "error".to_string(),
+            items: Vec::new(),
+            code: Some("NOT_CONFIGURED".to_string()),
+            message: Some(
+                "Ключ Kinopoisk Unofficial API не указан. Добавьте его в настройках приложения."
+                    .to_string(),
+            ),
+            retryable: false,
+        });
+    }
 
     let normalized_type = if type_param == "FILM" { "FILM" } else { "ALL" };
 
@@ -93,7 +83,7 @@ async fn fetch_kinopoisk_candidates(
             ("type", normalized_type),
             ("page", "1"),
         ])
-        .header("X-API-KEY", api_key)
+        .header("X-API-KEY", trimmed_api_key)
         .header("Content-Type", "application/json")
         .send()
         .await

@@ -6,6 +6,7 @@ import {
   Check,
   ExternalLink,
   Heart,
+  KeyRound,
   Loader2,
   Play,
   PlayCircle,
@@ -45,7 +46,7 @@ export function TitleDetailsPage() {
   const mediaType: MediaType = rawType === 'tv' ? 'tv' : 'movie';
   const id = Number(rawId);
 
-  const { isDemoMode } = useAppMode();
+  const { isDemoMode, keysVersion, openSettingsModal } = useAppMode();
   const {
     getEntry,
     markWatching,
@@ -62,6 +63,7 @@ export function TitleDetailsPage() {
     status: 'idle',
   });
   const [watchRetryCount, setWatchRetryCount] = useState(0);
+  const [missingKeyNotice, setMissingKeyNotice] = useState(false);
 
   const loadDetails = useCallback(async () => {
     if (!Number.isFinite(id) || id <= 0) {
@@ -84,7 +86,7 @@ export function TitleDetailsPage() {
     } finally {
       setLoading(false);
     }
-  }, [mediaType, id, isDemoMode]);
+  }, [mediaType, id, isDemoMode, keysVersion]);
 
   useEffect(() => {
     void loadDetails();
@@ -96,6 +98,7 @@ export function TitleDetailsPage() {
     let active = true;
     const { item } = details;
     setWatchState({ status: 'loading' });
+    setMissingKeyNotice(false);
 
     void resolveWatchLink(
       {
@@ -115,7 +118,7 @@ export function TitleDetailsPage() {
     return () => {
       active = false;
     };
-  }, [details, watchRetryCount]);
+  }, [details, watchRetryCount, keysVersion]);
 
   if (loading) {
     return <DetailsSkeleton />;
@@ -312,6 +315,16 @@ export function TitleDetailsPage() {
                     Смотреть
                     <ExternalLink className="h-3.5 w-3.5 opacity-80" aria-hidden="true" />
                   </a>
+                ) : watchState.status === 'missing_key' ? (
+                  <button
+                    type="button"
+                    data-testid="watch-missing-key-button"
+                    onClick={() => setMissingKeyNotice(true)}
+                    className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
+                  >
+                    <Play className="h-4 w-4 fill-current" aria-hidden="true" />
+                    Смотреть
+                  </button>
                 ) : null}
 
                 <button
@@ -365,7 +378,31 @@ export function TitleDetailsPage() {
                 </button>
               </div>
 
-              {watchState.status === 'loading' ? (
+              {missingKeyNotice && watchState.status === 'missing_key' ? (
+                <div
+                  role="status"
+                  data-testid="watch-missing-key-notice"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3 text-xs text-slate-200"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <KeyRound
+                      className="h-4 w-4 shrink-0 text-blue-400"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      Для кнопки «Смотреть» нужен ключ <strong>Kinopoisk Unofficial API</strong>. Укажите его в настройках приложения.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="watch-open-settings-button"
+                    onClick={openSettingsModal}
+                    className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-500"
+                  >
+                    Открыть настройки
+                  </button>
+                </div>
+              ) : watchState.status === 'loading' ? (
                 <p className="inline-flex items-center gap-2 text-xs text-slate-300">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" aria-hidden="true" />
                   Поиск ссылки для просмотра…
@@ -377,6 +414,16 @@ export function TitleDetailsPage() {
               ) : watchState.status === 'error' ? (
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400" data-testid="watch-status-message">
                   <span>{watchState.message}</span>
+                  {watchState.code === 'INVALID_KEY' ? (
+                    <button
+                      type="button"
+                      onClick={openSettingsModal}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-blue-400/30 bg-blue-500/15 px-2.5 py-1 text-xs font-medium text-blue-200 transition-colors hover:bg-blue-500/25"
+                    >
+                      <KeyRound className="h-3 w-3" aria-hidden="true" />
+                      Проверить ключ в настройках
+                    </button>
+                  ) : null}
                   {watchState.retryable ? (
                     <button
                       type="button"

@@ -211,6 +211,25 @@ async function startServer() {
       return;
     }
 
+    const headerApiKey = req.header('x-kinopoisk-api-key')?.trim() ?? '';
+    const envApiKey = process.env.KINOPOISK_API_KEY?.trim() ?? '';
+    const apiKey =
+      headerApiKey && headerApiKey !== 'MY_KINOPOISK_API_KEY'
+        ? headerApiKey
+        : envApiKey && envApiKey !== 'MY_KINOPOISK_API_KEY'
+          ? envApiKey
+          : '';
+
+    if (!apiKey) {
+      res.status(503).json({
+        status: 'error',
+        code: 'NOT_CONFIGURED',
+        message: 'Для кнопки «Смотреть» нужен ключ Kinopoisk Unofficial API. Добавьте его в настройках.',
+        retryable: false,
+      });
+      return;
+    }
+
     const cacheKey = buildCacheKey(mediaType, tmdbId);
     const cachedRecord = kinopoiskMemoryCache.get(cacheKey);
     if (cachedRecord) {
@@ -235,17 +254,6 @@ async function startServer() {
         }
       }
       kinopoiskMemoryCache.delete(cacheKey);
-    }
-
-    const apiKey = process.env.KINOPOISK_API_KEY?.trim();
-    if (!apiKey || apiKey === 'MY_KINOPOISK_API_KEY') {
-      res.status(503).json({
-        status: 'error',
-        code: 'NOT_CONFIGURED',
-        message: 'Ключ Kinopoisk Unofficial API не настроен на сервере.',
-        retryable: false,
-      });
-      return;
     }
 
     const typeParam: 'FILM' | 'ALL' = mediaType === 'movie' ? 'FILM' : 'ALL';

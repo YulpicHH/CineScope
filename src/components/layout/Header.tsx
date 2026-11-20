@@ -1,5 +1,6 @@
 import { Link, NavLink } from 'react-router-dom';
-import { User } from 'lucide-react';
+import { Settings, User } from 'lucide-react';
+import { useAppMode } from '../../hooks/useAppMode';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Главная', end: true },
@@ -9,6 +10,8 @@ const NAV_ITEMS = [
 ];
 
 export function Header() {
+  const { openSettingsModal } = useAppMode();
+
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/92 backdrop-blur-sm dark:border-white/[0.08] dark:bg-[#090B10]/92">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-8 px-4 sm:px-6 lg:px-8">
@@ -51,7 +54,18 @@ export function Header() {
           ))}
         </nav>
 
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={openSettingsModal}
+            aria-label="Настройки API-ключей"
+            title="Настройки API-ключей"
+            data-testid="header-settings-button"
+            className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-lg border border-slate-200 bg-slate-100/70 text-slate-700 transition-colors hover:bg-slate-200/70 focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-white/10 dark:bg-white/[0.05] dark:text-slate-200 dark:hover:bg-white/[0.1]"
+          >
+            <Settings className="h-4 w-4" aria-hidden="true" />
+          </button>
+
           <NavLink
             to="/profile"
             className={({ isActive }) =>

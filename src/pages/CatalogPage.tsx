@@ -102,7 +102,7 @@ function serializeFiltersToParams(next: CatalogFilters): URLSearchParams {
 
 export function CatalogPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { isDemoMode } = useAppMode();
+  const { isDemoMode, keysVersion } = useAppMode();
   const { watchedItems } = useLibrary();
 
   const [filters, setFilters] = useState<CatalogFilters>(() =>
@@ -163,7 +163,7 @@ export function CatalogPage() {
     return () => {
       active = false;
     };
-  }, [filters.mediaType, isDemoMode]);
+  }, [filters.mediaType, isDemoMode, keysVersion]);
 
   // Сбрасываем кэш рулетки при изменении фильтров
   useEffect(() => {
@@ -180,6 +180,7 @@ export function CatalogPage() {
     filters.hideWatched,
     debouncedQuery,
     isDemoMode,
+    keysVersion,
   ]);
 
   // Отменяем фоновый запрос рулетки при размонтировании
@@ -243,6 +244,7 @@ export function CatalogPage() {
       filters.sortBy,
       debouncedQuery,
       isDemoMode,
+      keysVersion,
     ],
   );
 

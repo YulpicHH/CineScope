@@ -8,7 +8,13 @@ import { clearKinopoiskClientCache } from '../services/kinopoisk';
 
 export function ProfilePage() {
   const { theme, setTheme } = useTheme();
-  const { hasApiKey, isDemoMode, exitDemoMode } = useAppMode();
+  const {
+    hasApiKey,
+    hasKinopoiskKey,
+    tmdbKeySource,
+    isDemoMode,
+    openSettingsModal,
+  } = useAppMode();
   const {
     watchlistItems,
     watchedItems,
@@ -26,7 +32,7 @@ export function ProfilePage() {
           Профиль и настройки
         </h1>
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Локальные настройки оформления, источника данных и управление сохранённой коллекцией.
+          Локальные настройки оформления, API-ключей и управление сохранённой коллекцией.
         </p>
       </div>
 
@@ -76,33 +82,41 @@ export function ProfilePage() {
         </div>
       </section>
 
-      {/* Источник каталога */}
+      {/* Ключи API (BYOK) */}
       <section className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-5 dark:border-white/[0.08] dark:bg-[#11151E]">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="space-y-1.5">
             <h2 className="font-display text-base font-semibold text-slate-950 dark:text-white">
-              Источник данных TMDB
+              API-ключи (TMDB и Kinopoisk)
             </h2>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              {hasApiKey
-                ? 'Ключ VITE_TMDB_API_KEY обнаружен в окружении. Используется живой каталог TMDB.'
-                : isDemoMode
-                  ? 'Сейчас активен демо-режим с 15 фильмами и сериалами. Вы можете открыть инструкцию для подключения ключа.'
-                  : 'Ключ TMDB не настроен.'}
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              {tmdbKeySource === 'user'
+                ? 'TMDB: используется ваш личный ключ, сохранённый на этом устройстве.'
+                : tmdbKeySource === 'env'
+                  ? 'TMDB: используется локальный ключ из окружения разработки.'
+                  : isDemoMode
+                    ? 'TMDB: активен демо-режим. Укажите свой ключ TMDB API (v3) для доступа ко всему каталогу.'
+                    : hasApiKey
+                      ? 'TMDB: подключён.'
+                      : 'TMDB: ключ не задан.'}
+            </p>
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              {hasKinopoiskKey
+                ? 'Kinopoisk Unofficial API: пользовательский ключ сохранён (кнопка «Смотреть» активна).'
+                : 'Kinopoisk Unofficial API: ключ не указан (можно добавить для работы кнопки «Смотреть»).'}
             </p>
           </div>
           <KeyRound className="h-5 w-5 shrink-0 text-blue-500" aria-hidden="true" />
         </div>
 
-        {!hasApiKey ? (
-          <button
-            type="button"
-            onClick={exitDemoMode}
-            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-100 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/10"
-          >
-            Показать инструкцию по настройке TMDB
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={openSettingsModal}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-100 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/10"
+        >
+          <KeyRound className="h-4 w-4" aria-hidden="true" />
+          Настроить API-ключи
+        </button>
       </section>
 
       {/* Локальные данные */}

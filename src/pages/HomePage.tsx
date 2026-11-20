@@ -15,7 +15,7 @@ import {
 import type { MediaItem } from '../types';
 
 export function HomePage() {
-  const { isDemoMode } = useAppMode();
+  const { isDemoMode, keysVersion } = useAppMode();
   const { getEntry, toggleWatchlist, recommendationProfile } = useLibrary();
 
   const [homeData, setHomeData] = useState<HomeSectionsData | null>(null);
@@ -40,7 +40,7 @@ export function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [isDemoMode]);
+  }, [isDemoMode, keysVersion]);
 
   useEffect(() => {
     void loadHome();
@@ -68,7 +68,7 @@ export function HomePage() {
     return () => {
       active = false;
     };
-  }, [isDemoMode, recommendationProfile]);
+  }, [isDemoMode, keysVersion, recommendationProfile]);
 
   const hero = homeData?.hero ?? null;
   const heroEntry = hero ? getEntry(hero.id, hero.mediaType) : undefined;

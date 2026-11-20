@@ -34,6 +34,7 @@ import {
 import { filterDemoCatalog } from '../utils/demoFilter';
 import { buildTmdbImageUrl, type TmdbImageSize } from '../utils/imageUrl';
 import { getMoodGenresForMediaType } from '../utils/moodMapping';
+import { getTmdbApiKeyValue } from './apiKeys';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
@@ -48,11 +49,7 @@ export class TmdbApiError extends Error {
 }
 
 export function getTmdbApiKey(): string {
-  const raw = import.meta.env.VITE_TMDB_API_KEY;
-  if (typeof raw !== 'string') return '';
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed === 'MY_TMDB_API_KEY') return '';
-  return trimmed;
+  return getTmdbApiKeyValue();
 }
 
 export function hasTmdbKey(): boolean {
@@ -235,7 +232,7 @@ async function tmdbFetch<T>(
   if (!response.ok) {
     if (response.status === 401) {
       throw new TmdbApiError(
-        'Неверный ключ TMDB API (401). Проверьте переменную VITE_TMDB_API_KEY.',
+        'Неверный ключ TMDB API (401). Проверьте ключ в настройках приложения.',
         401,
       );
     }

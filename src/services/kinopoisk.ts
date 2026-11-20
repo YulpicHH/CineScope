@@ -8,6 +8,7 @@ import {
   type KinopoiskCacheRecord,
 } from '../utils/kinopoiskMatcher';
 import { isTauriRuntime } from '../utils/platform';
+import { getKinopoiskApiKeyValue } from './apiKeys';
 
 const KP_CLIENT_CACHE_KEY = 'cinescope_kp_cache_v1';
 
@@ -28,11 +29,16 @@ export type KinopoiskWatchResolution =
       cached: boolean;
     }
   | {
+      status: 'missing_key';
+      message: string;
+    }
+  | {
       status: 'not_found' | 'ambiguous';
       message: string;
     }
   | {
       status: 'error';
+      code?: string;
       message: string;
       retryable: boolean;
     };
@@ -136,6 +142,15 @@ async function fetchResolutionViaTauri(
     };
   }
 
+  const apiKey = getKinopoiskApiKeyValue();
+  if (!apiKey) {
+    return {
+      status: 'missing_key',
+      message:
+        'Для кнопки «Смотреть» нужен ключ Kinopoisk Unofficial API. Добавьте его в настройках.',
+    };
+  }
+
   const typeParam = params.mediaType === 'movie' ? 'FILM' : 'ALL';
   const matchQuery = {
     tmdbId: params.tmdbId,
@@ -148,12 +163,21 @@ async function fetchResolutionViaTauri(
   try {
     const firstResponse = await invoke<TauriKinopoiskCandidatesResult>(
       'fetch_kinopoisk_candidates',
-      { keyword: primaryKeyword, typeParam },
+      { keyword: primaryKeyword, typeParam, apiKey },
     );
 
     if (firstResponse.status !== 'ok') {
+      if (firstResponse.code === 'NOT_CONFIGURED') {
+        return {
+          status: 'missing_key',
+          message:
+            firstResponse.message?.trim() ||
+            'Для кнопки «Смотреть» нужен ключ Kinopoisk Unofficial API. Добавьте его в настройках.',
+        };
+      }
       return {
         status: 'error',
+        code: firstResponse.code ?? undefined,
         message:
           firstResponse.message?.trim() ||
           'Источник просмотра временно недоступен.',
@@ -174,7 +198,7 @@ async function fetchResolutionViaTauri(
     if (shouldQueryOriginal) {
       const secondaryResponse = await invoke<TauriKinopoiskCandidatesResult>(
         'fetch_kinopoisk_candidates',
-        { keyword: originalTitle, typeParam },
+        { keyword: originalTitle, typeParam, apiKey },
       );
 
       if (secondaryResponse.status === 'ok' && Array.isArray(secondaryResponse.items)) {
@@ -238,18 +262,25 @@ async function fetchResolutionFromBackend(
     return fetchResolutionViaTauri(params, cacheKey);
   }
 
+  const userApiKey = getKinopoiskApiKeyValue();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (userApiKey) {
+    headers['X-Kinopoisk-Api-Key'] = userApiKey;
+  }
+
   try {
     const response = await fetch('/api/kinopoisk/resolve', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(params),
     });
 
     const data = (await response.json().catch(() => null)) as
       | {
           status?: unknown;
+          code?: unknown;
           kinopoiskId?: unknown;
           kinopoiskMediaType?: unknown;
           url?: unknown;
@@ -316,8 +347,19 @@ async function fetchResolutionFromBackend(
       };
     }
 
+    if (data.code === 'NOT_CONFIGURED') {
+      return {
+        status: 'missing_key',
+        message:
+          typeof data.message === 'string' && data.message.trim()
+            ? data.message
+            : 'Для кнопки «Смотреть» нужен ключ Kinopoisk Unofficial API. Добавьте его в настройках.',
+      };
+    }
+
     return {
       status: 'error',
+      code: typeof data.code === 'string' ? data.code : undefined,
       message:
         typeof data.message === 'string' && data.message.trim()
           ? data.message
@@ -345,6 +387,14 @@ export async function resolveWatchLink(
       status: 'error',
       message: 'Некорректный идентификатор TMDB.',
       retryable: false,
+    };
+  }
+
+  if (isTauriRuntime() && !getKinopoiskApiKeyValue()) {
+    return {
+      status: 'missing_key',
+      message:
+        'Для кнопки «Смотреть» нужен ключ Kinopoisk Unofficial API. Добавьте его в настройках.',
     };
   }
 

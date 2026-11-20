@@ -2,7 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
 import { RowSkeleton } from './components/ui/Skeleton';
-import { AppModeProvider, useAppMode } from './hooks/useAppMode';
+import { AppModeProvider } from './hooks/useAppMode';
 import { LibraryProvider } from './hooks/useLibrary';
 import { ThemeProvider } from './hooks/useTheme';
 import { getRouterMode, isTauriRuntime } from './utils/platform';
@@ -25,9 +25,6 @@ const HistoryPage = lazy(() =>
 const ProfilePage = lazy(() =>
   import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 );
-const SetupPage = lazy(() =>
-  import('./pages/SetupPage').then((m) => ({ default: m.SetupPage })),
-);
 
 function RouteFallback() {
   return (
@@ -46,16 +43,6 @@ function RouterAdapter({ children }: { children: ReactNode }) {
 }
 
 function AppRoutes() {
-  const { needsSetup } = useAppMode();
-
-  if (needsSetup) {
-    return (
-      <Suspense fallback={<RouteFallback />}>
-        <SetupPage />
-      </Suspense>
-    );
-  }
-
   return (
     <AppShell>
       <Suspense fallback={<RouteFallback />}>

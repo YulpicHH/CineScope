@@ -69,8 +69,6 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VITE_TMDB_API_KEY: ${{ secrets.VITE_TMDB_API_KEY }}
-          KINOPOISK_API_KEY: ${{ secrets.KINOPOISK_API_KEY }}
         with:
           tagName: ${{ steps.release_meta.outputs.tag }}
           releaseName: ${{ steps.release_meta.outputs.name }}
@@ -78,6 +76,8 @@ jobs:
             ## CineScope для macOS (Apple Silicon / M1–M4)
 
             Скачайте файл `.dmg` ниже из раздела **Assets**, откройте его и перетащите **CineScope.app** в папку **Applications**.
+
+            При первом запуске введите собственный ключ **TMDB API (v3)** (и при желании **Kinopoisk Unofficial API**) или попробуйте приложение в демо-режиме. Ключи хранятся только локально на вашем устройстве.
 
             > **Первый запуск без Apple Developer сертификата:**
             > Если macOS Gatekeeper покажет предупреждение о неподписанном приложении, выполните один раз в Терминале:

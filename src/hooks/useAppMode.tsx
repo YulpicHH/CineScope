@@ -1,12 +1,43 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
-import { hasTmdbKey } from '../services/tmdb';
-
-const DEMO_STORAGE_KEY = 'cinescope_demo_mode';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  clearStoredApiKeys,
+  getEffectiveKinopoiskKey,
+  getEffectiveTmdbKey,
+  getStoredApiKeys,
+  saveStoredApiKeys,
+  subscribeApiKeys,
+} from '../services/apiKeys';
+import { clearKinopoiskClientCache } from '../services/kinopoisk';
+import {
+  DEMO_MODE_STORAGE_KEY,
+  resolveAppModeState,
+  type ApiKeySource,
+  type StoredApiKeys,
+} from '../utils/apiKeysRules';
 
 interface AppModeContextValue {
   hasApiKey: boolean;
+  hasUserKeys: boolean;
+  hasKinopoiskKey: boolean;
+  tmdbKeySource: ApiKeySource;
+  userTmdbApiKey: string;
+  userKinopoiskApiKey: string;
+  keysVersion: number;
   isDemoMode: boolean;
   needsSetup: boolean;
+  settingsModalOpen: boolean;
+  openSettingsModal: () => void;
+  closeSettingsModal: () => void;
+  saveApiKeys: (next: StoredApiKeys) => void;
+  clearApiKeys: () => void;
   enterDemoMode: () => void;
   exitDemoMode: () => void;
 }
@@ -19,46 +50,132 @@ function readInitialDemoFlag(): boolean {
     if (params.get('autostart') === '1') {
       return true;
     }
-    return localStorage.getItem(DEMO_STORAGE_KEY) === 'true';
+    return localStorage.getItem(DEMO_MODE_STORAGE_KEY) === 'true';
   } catch {
     return false;
   }
 }
 
 export function AppModeProvider({ children }: { children: ReactNode }) {
-  const hasApiKey = hasTmdbKey();
+  const [storedKeys, setStoredKeys] = useState<StoredApiKeys>(getStoredApiKeys);
+  const [keysVersion, setKeysVersion] = useState(0);
   const [demoChoice, setDemoChoice] = useState<boolean>(readInitialDemoFlag);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
-  const isDemoMode = !hasApiKey && demoChoice;
-  const needsSetup = !hasApiKey && !demoChoice;
+  useEffect(() => {
+    return subscribeApiKeys(() => {
+      setStoredKeys(getStoredApiKeys());
+      setKeysVersion((v) => v + 1);
+    });
+  }, []);
+
+  const effectiveTmdb = useMemo(
+    () => getEffectiveTmdbKey(),
+    // Пересчитываем при каждом обновлении пользовательских ключей
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [storedKeys, keysVersion],
+  );
+  const effectiveKinopoisk = useMemo(
+    () => getEffectiveKinopoiskKey(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [storedKeys, keysVersion],
+  );
+
+  const modeState = useMemo(
+    () =>
+      resolveAppModeState({
+        effectiveTmdbKey: effectiveTmdb.value,
+        demoChosen: demoChoice,
+      }),
+    [effectiveTmdb.value, demoChoice],
+  );
+
+  const hasUserKeys = Boolean(
+    storedKeys.tmdbApiKey || storedKeys.kinopoiskApiKey,
+  );
+  const hasKinopoiskKey = effectiveKinopoisk.value.length > 0;
+
+  const openSettingsModal = useCallback(() => {
+    setSettingsModalOpen(true);
+  }, []);
+
+  const closeSettingsModal = useCallback(() => {
+    setSettingsModalOpen(false);
+  }, []);
 
   const enterDemoMode = useCallback(() => {
     setDemoChoice(true);
+    setSettingsModalOpen(false);
     try {
-      localStorage.setItem(DEMO_STORAGE_KEY, 'true');
+      localStorage.setItem(DEMO_MODE_STORAGE_KEY, 'true');
     } catch {
       // игнорируем ошибку localStorage
     }
   }, []);
 
   const exitDemoMode = useCallback(() => {
-    setDemoChoice(false);
-    try {
-      localStorage.removeItem(DEMO_STORAGE_KEY);
-    } catch {
-      // игнорируем ошибку localStorage
+    setSettingsModalOpen(true);
+  }, []);
+
+  const saveApiKeys = useCallback((next: StoredApiKeys) => {
+    const prevKp = getStoredApiKeys().kinopoiskApiKey;
+    const saved = saveStoredApiKeys(next);
+    if (prevKp !== saved.kinopoiskApiKey) {
+      clearKinopoiskClientCache();
     }
+    if (saved.tmdbApiKey) {
+      setDemoChoice(false);
+      try {
+        localStorage.removeItem(DEMO_MODE_STORAGE_KEY);
+      } catch {
+        // игнорируем ошибку localStorage
+      }
+    }
+    setSettingsModalOpen(false);
+  }, []);
+
+  const clearApiKeys = useCallback(() => {
+    clearStoredApiKeys();
+    clearKinopoiskClientCache();
   }, []);
 
   const value = useMemo<AppModeContextValue>(
     () => ({
-      hasApiKey,
-      isDemoMode,
-      needsSetup,
+      hasApiKey: modeState.hasApiKey,
+      hasUserKeys,
+      hasKinopoiskKey,
+      tmdbKeySource: effectiveTmdb.source,
+      userTmdbApiKey: storedKeys.tmdbApiKey,
+      userKinopoiskApiKey: storedKeys.kinopoiskApiKey,
+      keysVersion,
+      isDemoMode: modeState.isDemoMode,
+      needsSetup: modeState.needsSetup,
+      settingsModalOpen,
+      openSettingsModal,
+      closeSettingsModal,
+      saveApiKeys,
+      clearApiKeys,
       enterDemoMode,
       exitDemoMode,
     }),
-    [hasApiKey, isDemoMode, needsSetup, enterDemoMode, exitDemoMode],
+    [
+      modeState.hasApiKey,
+      modeState.isDemoMode,
+      modeState.needsSetup,
+      hasUserKeys,
+      hasKinopoiskKey,
+      effectiveTmdb.source,
+      storedKeys.tmdbApiKey,
+      storedKeys.kinopoiskApiKey,
+      keysVersion,
+      settingsModalOpen,
+      openSettingsModal,
+      closeSettingsModal,
+      saveApiKeys,
+      clearApiKeys,
+      enterDemoMode,
+      exitDemoMode,
+    ],
   );
 
   return (

@@ -12,6 +12,8 @@ interface MediaCardProps {
   showMediaType?: boolean;
   onRemove?: (item: MediaItem) => void;
   removeLabel?: string;
+  tvAutoFocus?: boolean;
+  onSelect?: (item: MediaItem) => void;
 }
 
 export const MediaCard = memo(function MediaCard({
@@ -20,10 +22,13 @@ export const MediaCard = memo(function MediaCard({
   showMediaType = false,
   onRemove,
   removeLabel,
+  tvAutoFocus = false,
+  onSelect,
 }: MediaCardProps) {
   const { getEntry, toggleWatchlist, toggleFavorite } = useLibrary();
   const entry = getEntry(item.id, item.mediaType);
   const tvMode = isTvMode();
+  const mediaKey = `${item.mediaType}:${item.id}`;
 
   const isWatchlist = entry?.status === 'watchlist';
   const isWatched = entry?.status === 'watched';
@@ -47,6 +52,9 @@ export const MediaCard = memo(function MediaCard({
         <Link
           to={`/title/${item.mediaType}/${item.id}`}
           data-tv-focusable="true"
+          data-media-key={mediaKey}
+          data-tv-autofocus={tvAutoFocus ? 'true' : undefined}
+          onClick={() => onSelect?.(item)}
           className="block h-full w-full overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100 focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-white/[0.08] dark:bg-[#11151E]"
         >
           <PosterArtwork
@@ -143,6 +151,7 @@ export const MediaCard = memo(function MediaCard({
         <Link
           to={`/title/${item.mediaType}/${item.id}`}
           tabIndex={tvMode ? -1 : undefined}
+          onClick={() => onSelect?.(item)}
           className="font-display line-clamp-1 text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-slate-100 dark:hover:text-blue-400"
         >
           {item.title}

@@ -12,12 +12,26 @@ export interface FocusRect {
 }
 
 const DIRECTION_EPSILON = 2;
-const DEFAULT_DUPLICATE_GUARD_MS = 45;
+const DEFAULT_SAME_DIRECTION_TAP_MS = 90;
+const DEFAULT_DIRECTION_CHANGE_MS = 40;
+const DEFAULT_REPEAT_INTERVAL_MS = 130;
+const DEFAULT_ACTION_DEBOUNCE_MS = 110;
+
+function isDirectionalAction(action: TvRemoteAction): action is TvDirection {
+  return (
+    action === 'up' ||
+    action === 'down' ||
+    action === 'left' ||
+    action === 'right'
+  );
+}
 
 /**
- * Предотвращает двойное срабатывание одного физического нажатия на Bluetooth-пульте Android TV
- * (когда WebView за 5–25 мс отправляет сразу два не-repeat события стрелки).
- * Удержание клавиши (isRepeat === true) пропускается без ограничений.
+ * Ограничивает частоту нажатий и удержания стрелок на пульте Android TV / SberBox:
+ * — Отсекает дребезг Bluetooth-пульта и слишком быстрые серии нажатий, из-за которых
+ *   WebView накапливает очередь прокруток и дёргает экран;
+ * — При удержании кнопки (isRepeat === true) задаёт плавный ритм (~7–8 шагов/с),
+ *   чтобы фокус и прокрутка оставались предсказуемыми и без задержек после отпускания.
  */
 export function shouldAcceptTvKeyEvent(
   action: TvRemoteAction,
@@ -25,16 +39,32 @@ export function shouldAcceptTvKeyEvent(
   lastAction: TvRemoteAction,
   lastTimestamp: number,
   now: number,
-  debounceMs = DEFAULT_DUPLICATE_GUARD_MS,
+  debounceMs = DEFAULT_SAME_DIRECTION_TAP_MS,
+  repeatIntervalMs = DEFAULT_REPEAT_INTERVAL_MS,
 ): boolean {
   if (!action) return false;
-  if (isRepeat) return true;
-  if (
-    action === lastAction &&
-    (action === 'up' || action === 'down' || action === 'left' || action === 'right') &&
-    now - lastTimestamp >= 0 &&
-    now - lastTimestamp < debounceMs
-  ) {
+
+  const elapsed = now - lastTimestamp;
+  if (lastTimestamp <= 0 || elapsed < 0) {
+    return true;
+  }
+
+  if (isDirectionalAction(action)) {
+    if (isRepeat) {
+      return elapsed >= repeatIntervalMs;
+    }
+    if (action === lastAction) {
+      return elapsed >= debounceMs;
+    }
+    // Смена направления (например, Вниз -> Вправо) реагирует быстро, но без дребезга
+    return elapsed >= Math.min(DEFAULT_DIRECTION_CHANGE_MS, debounceMs);
+  }
+
+  // Для «ОК» и «Назад» блокируем удержание и случайный двойной клик
+  if (isRepeat) {
+    return false;
+  }
+  if (action === lastAction && elapsed < DEFAULT_ACTION_DEBOUNCE_MS) {
     return false;
   }
   return true;
@@ -131,11 +161,12 @@ export function findNextFocusableIndex(
     const cy = c.top + c.height / 2;
 
     if (direction === 'right') {
-      if (cx <= ox + DIRECTION_EPSILON || c.right <= origin.right - DIRECTION_EPSILON) {
+      // Требуем смещение центра и левого края вправо (это поддерживает и встроенные кнопки внутри широкого input, например «Очистить» / «Показать пароль»)
+      if (cx <= ox + DIRECTION_EPSILON || c.left <= origin.left + DIRECTION_EPSILON) {
         continue;
       }
     } else if (direction === 'left') {
-      if (cx >= ox - DIRECTION_EPSILON || c.left >= origin.left + DIRECTION_EPSILON) {
+      if (cx >= ox - DIRECTION_EPSILON || c.left >= origin.left - DIRECTION_EPSILON) {
         continue;
       }
     } else if (direction === 'down') {

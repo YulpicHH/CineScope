@@ -12,6 +12,15 @@ import {
   mergeReceivedPairingKeys,
   normalizePairingPayload,
 } from '../services/tvPairing';
+import {
+  buildCatalogCacheKey,
+  clearCatalogSnapshot,
+  getLastCatalogSearch,
+  getMatchingCatalogSnapshot,
+  saveCatalogSnapshot,
+  updateCatalogSnapshotPosition,
+} from './catalogSessionCache';
+import type { CatalogFilters, MediaItem } from '../types';
 
 function rect(left: number, top: number, width = 160, height = 240): FocusRect {
   return {
@@ -98,16 +107,84 @@ test('findNextFocusableIndex steps through tightly packed segmented tabs (Все
   assert.equal(findNextFocusableIndex(scaledSerials, tabs, 'right', 2), 3);
 });
 
-test('shouldAcceptTvKeyEvent deduplicates rapid non-repeat D-Pad bounces while allowing key hold repeats', () => {
+test('shouldAcceptTvKeyEvent paces rapid tapping and key-hold repeats smoothly without queuing bursts', () => {
   assert.equal(shouldAcceptTvKeyEvent('right', false, null, 0, 100), true);
-  // Duplicate non-repeat event 15ms later -> rejected
-  assert.equal(shouldAcceptTvKeyEvent('right', false, 'right', 100, 115), false);
-  // Different direction 15ms later -> accepted
-  assert.equal(shouldAcceptTvKeyEvent('down', false, 'right', 100, 115), true);
-  // Same direction with repeat=true (holding button) -> accepted
-  assert.equal(shouldAcceptTvKeyEvent('right', true, 'right', 100, 115), true);
-  // Same direction after debounce window -> accepted
-  assert.equal(shouldAcceptTvKeyEvent('right', false, 'right', 100, 160), true);
+  // Быстрый дребезг/серия нажатий в ту же сторону (< 90ms) отсекается
+  assert.equal(shouldAcceptTvKeyEvent('right', false, 'right', 100, 145), false);
+  // Смена направления реагирует быстрее (>= 40ms)
+  assert.equal(shouldAcceptTvKeyEvent('down', false, 'right', 100, 145), true);
+  // Слишком быстрый повтор при удержании (< 130ms) отсекается, чтобы не дёргался экран
+  assert.equal(shouldAcceptTvKeyEvent('right', true, 'right', 100, 160), false);
+  // Повтор при удержании после интервала (>= 130ms) плавно принимается
+  assert.equal(shouldAcceptTvKeyEvent('right', true, 'right', 100, 235), true);
+  // Повторное обычное нажатие после окна дебаунса (>= 90ms) принимается
+  assert.equal(shouldAcceptTvKeyEvent('right', false, 'right', 100, 195), true);
+  // Удержание ОК/Назад блокируется, чтобы избежать случайных двойных срабатываний
+  assert.equal(shouldAcceptTvKeyEvent('select', true, 'select', 100, 300), false);
+  assert.equal(shouldAcceptTvKeyEvent('back', true, 'back', 100, 300), false);
+});
+
+test('findNextFocusableIndex walks every tab in Header, Library, Rating 1-10, and Search+Clear without skipping a single element', () => {
+  // 1. Шапка: CineScope, Главная, Каталог, Коллекция, История, Настройки, Профиль
+  const header: FocusRect[] = [
+    rect(48, 22, 118, 36), // 0: CineScope
+    rect(320, 22, 88, 36), // 1: Главная
+    rect(420, 22, 86, 36), // 2: Каталог
+    rect(518, 22, 104, 36), // 3: Коллекция
+    rect(634, 22, 92, 36), // 4: История
+    rect(1040, 20, 40, 40), // 5: Настройки
+    rect(1090, 20, 112, 40), // 6: Профиль
+  ];
+  for (let i = 0; i < header.length - 1; i += 1) {
+    assert.equal(findNextFocusableIndex(header[i], header, 'right', i), i + 1);
+  }
+  assert.equal(findNextFocusableIndex(header[header.length - 1], header, 'right', header.length - 1), -1);
+  for (let i = header.length - 1; i > 0; i -= 1) {
+    assert.equal(findNextFocusableIndex(header[i], header, 'left', i), i - 1);
+  }
+  assert.equal(findNextFocusableIndex(header[0], header, 'left', 0), -1);
+
+  // 2. Вкладки коллекции: В процессе, Посмотреть позже, Просмотрено, Избранное
+  const libraryTabs: FocusRect[] = [
+    rect(48, 160, 132, 38),
+    rect(188, 160, 186, 38),
+    rect(382, 160, 148, 38),
+    rect(538, 160, 134, 38),
+  ];
+  for (let i = 0; i < libraryTabs.length - 1; i += 1) {
+    assert.equal(findNextFocusableIndex(libraryTabs[i], libraryTabs, 'right', i), i + 1);
+  }
+  for (let i = libraryTabs.length - 1; i > 0; i -= 1) {
+    assert.equal(findNextFocusableIndex(libraryTabs[i], libraryTabs, 'left', i), i - 1);
+  }
+
+  // 3. Строка поиска с встроенной кнопкой «Очистить» внутри правого края и кнопкой «Случайный выбор» справа
+  const searchRow: FocusRect[] = [
+    rect(40, 140, 56, 40), // 0: Все
+    rect(100, 140, 88, 40), // 1: Фильмы
+    rect(192, 140, 94, 40), // 2: Сериалы
+    rect(290, 140, 76, 40), // 3: Аниме
+    rect(378, 138, 420, 44), // 4: Поиск (378..798)
+    rect(766, 148, 24, 24), // 5: Кнопка X внутри правого края поля поиска (766..790)
+    rect(810, 138, 170, 44), // 6: Случайный выбор
+  ];
+  for (let i = 0; i < searchRow.length - 1; i += 1) {
+    assert.equal(findNextFocusableIndex(searchRow[i], searchRow, 'right', i), i + 1);
+  }
+  for (let i = searchRow.length - 1; i > 0; i -= 1) {
+    assert.equal(findNextFocusableIndex(searchRow[i], searchRow, 'left', i), i - 1);
+  }
+
+  // 4. Кнопки оценки 1..10 на странице фильма
+  const ratingButtons: FocusRect[] = Array.from({ length: 10 }, (_, idx) =>
+    rect(48 + idx * 42, 620, 36, 36),
+  );
+  for (let i = 0; i < 9; i += 1) {
+    assert.equal(findNextFocusableIndex(ratingButtons[i], ratingButtons, 'right', i), i + 1);
+  }
+  for (let i = 9; i > 0; i -= 1) {
+    assert.equal(findNextFocusableIndex(ratingButtons[i], ratingButtons, 'left', i), i - 1);
+  }
 });
 
 test('findNextFocusableIndex prefers same-row elements when moving horizontally even if another row is closer diagonally', () => {
@@ -247,4 +324,100 @@ test('TV QR pairing helpers build crisp SVG path and normalize/merge received AP
     tmdbApiKey: 'existing-tmdb',
     kinopoiskApiKey: 'new-kp-uuid',
   });
+});
+
+test('catalogSessionCache preserves loaded pages, scrollY, and focused movie card and invalidates on filter or key changes', () => {
+  clearCatalogSnapshot();
+
+  const baseFilters: CatalogFilters = {
+    mediaType: 'movie',
+    query: 'Матрица',
+    moods: ['tense', 'mysterious'],
+    genreIds: [878, 28],
+    country: 'US',
+    year: '1999',
+    minRating: 7,
+    sortBy: 'popularity.desc',
+    hideWatched: false,
+  };
+
+  // Порядок moods/genreIds и регистр query не меняют ключ кэша
+  const keyA = buildCatalogCacheKey(baseFilters, false, 1);
+  const keyB = buildCatalogCacheKey(
+    {
+      ...baseFilters,
+      query: '  матрица ',
+      moods: ['mysterious', 'tense'],
+      genreIds: [28, 878],
+      country: 'us',
+    },
+    false,
+    1,
+  );
+  assert.equal(keyA, keyB);
+
+  // Смена режима или версии ключей меняет ключ кэша
+  assert.notEqual(keyA, buildCatalogCacheKey(baseFilters, true, 1));
+  assert.notEqual(keyA, buildCatalogCacheKey(baseFilters, false, 2));
+
+  const sampleItems: MediaItem[] = [
+    {
+      id: 603,
+      mediaType: 'movie',
+      title: 'Матрица',
+      originalTitle: 'The Matrix',
+      overview: 'Описание',
+      posterPath: null,
+      backdropPath: null,
+      releaseDate: '1999-03-30',
+      year: '1999',
+      runtime: 136,
+      genreIds: [878, 28],
+      genres: [],
+      voteAverage: 8.7,
+      voteCount: 25000,
+      popularity: 95,
+      originCountry: ['US'],
+      isDemoData: false,
+    },
+  ];
+
+  saveCatalogSnapshot({
+    cacheKey: keyA,
+    search: '?type=movie&q=%D0%9C%D0%B0%D1%82%D1%80%D0%B8%D1%86%D0%B0',
+    filters: baseFilters,
+    items: sampleItems,
+    page: 3,
+    totalPages: 12,
+    scrollY: 1420,
+    focusedItemKey: 'movie:603',
+    savedAt: 1000,
+  });
+
+  updateCatalogSnapshotPosition(keyA, 1680, 'movie:603');
+  const restored = getMatchingCatalogSnapshot(keyA);
+  assert.ok(restored);
+  assert.equal(restored.page, 3);
+  assert.equal(restored.items.length, 1);
+  assert.equal(restored.scrollY, 1680);
+  assert.equal(restored.focusedItemKey, 'movie:603');
+  assert.equal(
+    getLastCatalogSearch(),
+    '?type=movie&q=%D0%9C%D0%B0%D1%82%D1%80%D0%B8%D1%86%D0%B0',
+  );
+
+  // Другой ключ фильтров не получает чужой снимок
+  const otherKey = buildCatalogCacheKey(
+    { ...baseFilters, mediaType: 'tv' },
+    false,
+    1,
+  );
+  assert.equal(getMatchingCatalogSnapshot(otherKey), null);
+
+  // Просроченный снимок автоматически очищается
+  assert.equal(
+    getMatchingCatalogSnapshot(keyA, Date.now() + 31 * 60 * 1000),
+    null,
+  );
+  assert.equal(getLastCatalogSearch(), '');
 });

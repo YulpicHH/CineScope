@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { MediaGrid } from '../components/cards/MediaGrid';
 import { RandomPickModal } from '../components/catalog/RandomPickModal';
 import { CatalogFilterBar } from '../components/filters/CatalogFilterBar';
@@ -28,6 +28,13 @@ import {
   isValidMoodId,
   pickRandomEveningItem,
 } from '../utils/catalogHelpers';
+import {
+  buildCatalogCacheKey,
+  getMatchingCatalogSnapshot,
+  saveCatalogSnapshot,
+  updateCatalogSnapshotPosition,
+} from '../utils/catalogSessionCache';
+import { isTvMode } from '../utils/platform';
 
 function parseMediaScope(raw: string | null): CatalogMediaScope {
   if (raw === 'movie' || raw === 'tv' || raw === 'all' || raw === 'anime') {
@@ -101,23 +108,86 @@ function serializeFiltersToParams(next: CatalogFilters): URLSearchParams {
 }
 
 export function CatalogPage() {
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { isDemoMode, keysVersion } = useAppMode();
   const { watchedItems } = useLibrary();
 
-  const [filters, setFilters] = useState<CatalogFilters>(() =>
-    readInitialFilters(searchParams),
+  const initialBootRef = useRef<{
+    filters: CatalogFilters;
+    cacheKey: string;
+    snapshot: ReturnType<typeof getMatchingCatalogSnapshot>;
+  } | null>(null);
+
+  if (initialBootRef.current === null) {
+    const parsedFilters = readInitialFilters(searchParams);
+    const cacheKey = buildCatalogCacheKey(parsedFilters, isDemoMode, keysVersion);
+    const snapshot = getMatchingCatalogSnapshot(cacheKey);
+    initialBootRef.current = {
+      filters: parsedFilters,
+      cacheKey,
+      snapshot,
+    };
+  }
+
+  const initialSnapshot = initialBootRef.current.snapshot;
+
+  const [filters, setFilters] = useState<CatalogFilters>(
+    () => initialBootRef.current!.filters,
   );
   const debouncedQuery = useDebounce(filters.query, 350);
   const highlightMoods = searchParams.get('panel') === 'mood';
 
   const [genres, setGenres] = useState<Genre[]>([]);
-  const [items, setItems] = useState<MediaItem[]>([]);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<MediaItem[]>(
+    () => initialSnapshot?.items ?? [],
+  );
+  const [page, setPage] = useState(() => initialSnapshot?.page ?? 1);
+  const [totalPages, setTotalPages] = useState(
+    () => initialSnapshot?.totalPages ?? 1,
+  );
+  const [loading, setLoading] = useState(() => !initialSnapshot);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const activeCacheKey = useMemo(
+    () =>
+      buildCatalogCacheKey(
+        { ...filters, query: debouncedQuery },
+        isDemoMode,
+        keysVersion,
+      ),
+    [filters, debouncedQuery, isDemoMode, keysVersion],
+  );
+
+  // Пропускаем повторную загрузку первой страницы, если мгновенно восстановили кэш каталога
+  const skipInitialFetchKeyRef = useRef<string | null>(
+    initialSnapshot ? initialBootRef.current.cacheKey : null,
+  );
+  const pendingRestoreRef = useRef<{
+    scrollY: number;
+    focusedItemKey: string | null;
+  } | null>(
+    initialSnapshot
+      ? {
+          scrollY: initialSnapshot.scrollY,
+          focusedItemKey: initialSnapshot.focusedItemKey,
+        }
+      : null,
+  );
+  const [restoredFocusKey, setRestoredFocusKey] = useState<string | null>(
+    () => initialSnapshot?.focusedItemKey ?? null,
+  );
+
+  const latestScrollYRef = useRef<number>(initialSnapshot?.scrollY ?? 0);
+  const lastFocusedItemKeyRef = useRef<string | null>(
+    initialSnapshot?.focusedItemKey ?? null,
+  );
+  const isLeavingToTitleRef = useRef(false);
+  const latestCacheKeyRef = useRef<string>(activeCacheKey);
+  latestCacheKeyRef.current = activeCacheKey;
+  const latestSearchRef = useRef<string>(location.search);
+  latestSearchRef.current = location.search;
 
   // Состояние модального окна «Случайный выбор на вечер»
   const [randomOpen, setRandomOpen] = useState(false);
@@ -249,19 +319,124 @@ export function CatalogPage() {
   );
 
   useEffect(() => {
+    if (skipInitialFetchKeyRef.current === activeCacheKey) {
+      skipInitialFetchKeyRef.current = null;
+      return;
+    }
     const controller = new AbortController();
     void loadPage(1, false, controller.signal);
     return () => {
       controller.abort();
     };
-  }, [loadPage]);
+  }, [loadPage, activeCacheKey]);
+
+  // Отслеживаем текущую позицию прокрутки каталога и сохраняем её при уходе со страницы
+  useEffect(() => {
+    const handleScroll = () => {
+      if (isLeavingToTitleRef.current) return;
+      latestScrollYRef.current = window.scrollY;
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      updateCatalogSnapshotPosition(
+        latestCacheKeyRef.current,
+        latestScrollYRef.current,
+        lastFocusedItemKeyRef.current,
+        latestSearchRef.current,
+      );
+    };
+  }, []);
+
+  // Сохраняем загруженные страницы каталога в сессионный кэш
+  useEffect(() => {
+    if (loading || error) return;
+    saveCatalogSnapshot({
+      cacheKey: activeCacheKey,
+      search: location.search,
+      filters: { ...filters, query: debouncedQuery },
+      items,
+      page,
+      totalPages,
+      scrollY: latestScrollYRef.current,
+      focusedItemKey: lastFocusedItemKeyRef.current,
+    });
+  }, [
+    loading,
+    error,
+    activeCacheKey,
+    location.search,
+    filters,
+    debouncedQuery,
+    items,
+    page,
+    totalPages,
+  ]);
+
+  // Мгновенно восстанавливаем позицию прокрутки и фокус на фильме при возврате со страницы тайтла
+  useLayoutEffect(() => {
+    const pending = pendingRestoreRef.current;
+    if (!pending || loading) return;
+    pendingRestoreRef.current = null;
+
+    const restoreScrollAndFocus = () => {
+      if (pending.scrollY > 0) {
+        window.scrollTo(0, pending.scrollY);
+        latestScrollYRef.current = pending.scrollY;
+      }
+
+      if (pending.focusedItemKey) {
+        const target = document.querySelector<HTMLElement>(
+          `[data-media-key="${pending.focusedItemKey}"]`,
+        );
+        if (target) {
+          target.focus({ preventScroll: true });
+          if (isTvMode()) {
+            target.classList.add('tv-focused');
+          }
+          // Если из-за разницы высоты экрана карточка оказалась вне видимой зоны — аккуратно докручиваем до неё
+          const rect = target.getBoundingClientRect();
+          if (rect.top < 72 || rect.bottom > window.innerHeight - 24) {
+            const centeredY = Math.max(
+              0,
+              window.scrollY + rect.top - window.innerHeight * 0.35,
+            );
+            window.scrollTo(0, centeredY);
+            latestScrollYRef.current = centeredY;
+          }
+        }
+      }
+    };
+
+    restoreScrollAndFocus();
+    const rafId = window.requestAnimationFrame(restoreScrollAndFocus);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [loading]);
 
   const { visible: visibleItems, hiddenCount: hiddenWatchedCount } = useMemo(
     () => excludeWatchedItems(items, watchedKeys, filters.hideWatched),
     [items, watchedKeys, filters.hideWatched],
   );
 
+  const handleCardSelect = useCallback((selectedItem: MediaItem) => {
+    const key = getMediaItemKey(selectedItem);
+    isLeavingToTitleRef.current = true;
+    lastFocusedItemKeyRef.current = key;
+    latestScrollYRef.current = window.scrollY;
+    updateCatalogSnapshotPosition(
+      latestCacheKeyRef.current,
+      window.scrollY,
+      key,
+      latestSearchRef.current,
+    );
+  }, []);
+
   const handleFiltersChange = (next: CatalogFilters) => {
+    lastFocusedItemKeyRef.current = null;
+    setRestoredFocusKey(null);
+    latestScrollYRef.current = 0;
     setFilters(next);
     setSearchParams(serializeFiltersToParams(next), { replace: true });
   };
@@ -455,12 +630,26 @@ export function CatalogPage() {
           }
         />
       ) : (
-        <div className="space-y-8">
+        <div
+          className="space-y-8"
+          onFocusCapture={(event) => {
+            const target =
+              event.target instanceof HTMLElement
+                ? event.target.closest<HTMLElement>('[data-media-key]')
+                : null;
+            const mediaKey = target?.dataset.mediaKey;
+            if (mediaKey) {
+              lastFocusedItemKeyRef.current = mediaKey;
+            }
+          }}
+        >
           <MediaGrid
             items={visibleItems}
             showMediaType={
               filters.mediaType === 'all' || filters.mediaType === 'anime'
             }
+            autoFocusKey={restoredFocusKey}
+            onItemSelect={handleCardSelect}
           />
 
           {page < totalPages ? (

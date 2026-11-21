@@ -35,6 +35,7 @@ import {
   formatVoteCount,
 } from '../utils/formatters';
 import { buildProfileImageProps } from '../utils/imageUrl';
+import { getLastCatalogSearch } from '../utils/catalogSessionCache';
 import {
   isAndroidTauri,
   isDesktopTauriRuntime,
@@ -101,7 +102,7 @@ export function TitleDetailsPage() {
 
   useEffect(() => {
     void loadDetails();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'auto' });
   }, [loadDetails]);
 
   useEffect(() => {
@@ -132,6 +133,8 @@ export function TitleDetailsPage() {
     };
   }, [details, watchRetryCount, keysVersion]);
 
+  const catalogBackHref = `/catalog${getLastCatalogSearch()}`;
+
   if (loading) {
     return <DetailsSkeleton />;
   }
@@ -140,7 +143,7 @@ export function TitleDetailsPage() {
     return (
       <div className="space-y-4">
         <Link
-          to="/catalog"
+          to={catalogBackHref}
           className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -172,7 +175,7 @@ export function TitleDetailsPage() {
     <div className="space-y-10">
       <div>
         <Link
-          to="/catalog"
+          to={catalogBackHref}
           className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />

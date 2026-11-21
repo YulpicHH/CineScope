@@ -34,7 +34,7 @@ import {
 import { filterDemoCatalog } from '../utils/demoFilter';
 import { buildTmdbImageUrl, type TmdbImageSize } from '../utils/imageUrl';
 import { getMoodGenresForMediaType } from '../utils/moodMapping';
-import { getTmdbApiKeyValue } from './apiKeys';
+import { getTmdbApiKeyValue, tmdbNativeGet } from './apiKeys';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
@@ -204,16 +204,60 @@ async function tmdbFetch<T>(
     throw new TmdbApiError('Ключ TMDB API не задан.', 401);
   }
 
-  const url = new URL(`${TMDB_BASE_URL}${endpoint}`);
-  url.searchParams.set('api_key', apiKey);
+  const queryPairs: Array<[string, string]> = [];
   if (!params.language) {
-    url.searchParams.set('language', 'ru-RU');
+    queryPairs.push(['language', 'ru-RU']);
   }
-
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== '') {
-      url.searchParams.set(key, String(value));
+      queryPairs.push([key, String(value)]);
     }
+  }
+
+  // В Tauri (Android TV / SberBox, macOS, Windows) используем Rust HTTP-клиент (rustls-tls)
+  const nativeResponse = await tmdbNativeGet(endpoint, queryPairs, apiKey);
+  if (nativeResponse) {
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    if (nativeResponse.networkError || nativeResponse.status === 0) {
+      throw new TmdbApiError(
+        'Сетевая ошибка при обращении к TMDB. Проверьте подключение к интернету или VPN.',
+        0,
+      );
+    }
+    if (!nativeResponse.ok) {
+      if (nativeResponse.status === 401) {
+        throw new TmdbApiError(
+          'Неверный ключ TMDB API (401). Проверьте ключ в настройках приложения.',
+          401,
+        );
+      }
+      if (nativeResponse.status === 404) {
+        throw new TmdbApiError('Запрошенный тайтл не найден в каталоге TMDB.', 404);
+      }
+      if (nativeResponse.status === 429) {
+        throw new TmdbApiError(
+          'Превышен лимит запросов к TMDB API. Повторите чуть позже.',
+          429,
+        );
+      }
+      throw new TmdbApiError(
+        `Ошибка TMDB API (${nativeResponse.status}).`,
+        nativeResponse.status,
+      );
+    }
+    try {
+      return JSON.parse(nativeResponse.body ?? '{}') as T;
+    } catch {
+      throw new TmdbApiError('Получен некорректный ответ от TMDB API.', 502);
+    }
+  }
+
+  const url = new URL(`${TMDB_BASE_URL}${endpoint}`);
+  url.searchParams.set('api_key', apiKey);
+  for (const [key, value] of queryPairs) {
+    url.searchParams.set(key, value);
   }
 
   let response: Response;

@@ -83,6 +83,7 @@ export function ApiSettingsModal() {
   const [showTmdbKey, setShowTmdbKey] = useState(false);
   const [showKpKey, setShowKpKey] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [canSaveOffline, setCanSaveOffline] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const prevOpenRef = useRef(false);
@@ -102,6 +103,7 @@ export function ApiSettingsModal() {
       setPlayerModeState(getPlayerMode(detected));
       setShowTmdbKey(false);
       setShowKpKey(false);
+      setCanSaveOffline(false);
       setErrorMessage(null);
       setInfoMessage(null);
     }
@@ -152,6 +154,7 @@ export function ApiSettingsModal() {
 
     setErrorMessage(null);
     setInfoMessage(null);
+    setCanSaveOffline(false);
 
     const trimmedTmdb = tmdbInput.trim();
     const trimmedKp = kinopoiskInput.trim();
@@ -169,6 +172,13 @@ export function ApiSettingsModal() {
         const result = await validateTmdbApiKey(trimmedTmdb);
         if (!result.ok) {
           setErrorMessage(result.message);
+          if (
+            result.reason === 'network' ||
+            result.reason === 'rate_limit' ||
+            result.reason === 'server'
+          ) {
+            setCanSaveOffline(true);
+          }
           return;
         }
         saveApiKeys({
@@ -195,6 +205,28 @@ export function ApiSettingsModal() {
     );
   };
 
+  const handleSaveWithoutNetworkCheck = () => {
+    if (validating) return;
+    const trimmedTmdb = tmdbInput.trim();
+    const trimmedKp = kinopoiskInput.trim();
+    if (!trimmedTmdb && !trimmedKp) return;
+    if (
+      (trimmedTmdb && hasInternalWhitespace(trimmedTmdb)) ||
+      (trimmedKp && hasInternalWhitespace(trimmedKp))
+    ) {
+      setErrorMessage(
+        'Ключ содержит пробелы или переносы строк. Проверьте, что он скопирован полностью без лишних символов.',
+      );
+      return;
+    }
+    setCanSaveOffline(false);
+    setErrorMessage(null);
+    saveApiKeys({
+      tmdbApiKey: trimmedTmdb,
+      kinopoiskApiKey: trimmedKp,
+    });
+  };
+
   const handleQrKeysReceived = async (rawPayload: TvPairingPayload) => {
     if (validating) return;
 
@@ -212,6 +244,7 @@ export function ApiSettingsModal() {
     setTmdbInput(merged.tmdbApiKey);
     setKinopoiskInput(merged.kinopoiskApiKey);
     setErrorMessage(null);
+    setCanSaveOffline(false);
     setInfoMessage('Ключи получены с телефона — проверяем и сохраняем...');
 
     if (merged.tmdbApiKey) {
@@ -219,8 +252,25 @@ export function ApiSettingsModal() {
       try {
         const result = await validateTmdbApiKey(merged.tmdbApiKey);
         if (!result.ok) {
-          setInfoMessage(null);
-          setErrorMessage(result.message);
+          if (result.reason === 'invalid_key' || result.reason === 'invalid_format') {
+            setInfoMessage(null);
+            setErrorMessage(result.message);
+            return;
+          }
+
+          // При временной недоступности TMDB (например, VPN ещё не включён) сразу сохраняем оба ключа локально,
+          // чтобы они не потерялись при закрытии окна настроек
+          saveApiKeys(
+            {
+              tmdbApiKey: merged.tmdbApiKey,
+              kinopoiskApiKey: merged.kinopoiskApiKey,
+            },
+            { keepOpen: true },
+          );
+          setErrorMessage(null);
+          setInfoMessage(
+            'Ключи получены с телефона и сохранены на устройстве, но сейчас нет связи с TMDB. Включите интернет или VPN — каталог заработает сразу.',
+          );
           return;
         }
         saveApiKeys({
@@ -241,7 +291,17 @@ export function ApiSettingsModal() {
       return;
     }
 
-    setInfoMessage('Ключ Kinopoisk подставлен. Добавьте также ключ TMDB API (v3) для полного каталога.');
+    // Сохраняем полученный ключ Kinopoisk локально, чтобы не потерять его
+    saveApiKeys(
+      {
+        tmdbApiKey: '',
+        kinopoiskApiKey: merged.kinopoiskApiKey,
+      },
+      { keepOpen: true },
+    );
+    setInfoMessage(
+      'Ключ Kinopoisk сохранён. Добавьте также ключ TMDB API (v3) для полного каталога.',
+    );
   };
 
   const handleClearKeys = () => {
@@ -360,6 +420,7 @@ export function ApiSettingsModal() {
                 onChange={(e) => {
                   setTmdbInput(e.target.value);
                   if (errorMessage) setErrorMessage(null);
+                  if (canSaveOffline) setCanSaveOffline(false);
                 }}
                 placeholder="Например, 32-символьный API Key (v3 auth)"
                 autoComplete="off"
@@ -629,21 +690,35 @@ export function ApiSettingsModal() {
               ) : null}
             </div>
 
-            <button
-              type="submit"
-              disabled={validating}
-              data-testid="save-api-keys-button"
-              className="ml-auto inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-blue-400 disabled:cursor-wait disabled:opacity-70"
-            >
-              {validating ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  Проверка ключа...
-                </>
-              ) : (
-                'Сохранить'
-              )}
-            </button>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              {canSaveOffline ? (
+                <button
+                  type="button"
+                  disabled={validating}
+                  onClick={handleSaveWithoutNetworkCheck}
+                  data-testid="save-api-keys-offline-button"
+                  className="inline-flex items-center justify-center whitespace-nowrap rounded-xl border border-amber-400/40 bg-amber-500/15 px-4 py-2.5 text-sm font-semibold text-amber-200 transition-colors hover:bg-amber-500/25 focus-visible:outline-2 focus-visible:outline-amber-400 disabled:opacity-60"
+                >
+                  Сохранить без проверки
+                </button>
+              ) : null}
+
+              <button
+                type="submit"
+                disabled={validating}
+                data-testid="save-api-keys-button"
+                className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-blue-400 disabled:cursor-wait disabled:opacity-70"
+              >
+                {validating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    Проверка ключа...
+                  </>
+                ) : (
+                  'Сохранить'
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Подсказка установки PWA на экран «Домой» (только в веб-браузере вне standalone, вне Tauri и вне ТВ-режима) */}

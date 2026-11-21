@@ -26,6 +26,7 @@ use tv_pairing::{
 };
 
 const KINOPOISK_API_URL: &str = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
+const TMDB_API_BASE_URL: &str = "https://api.themoviedb.org/3";
 #[cfg(desktop)]
 const PLAYER_WINDOW_LABEL: &str = "player";
 
@@ -207,6 +208,16 @@ pub struct KinopoiskCandidatesResult {
     pub code: Option<String>,
     pub message: Option<String>,
     pub retryable: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TmdbProxyResponse {
+    pub ok: bool,
+    pub status: u16,
+    pub body: Option<String>,
+    pub network_error: bool,
+    pub timed_out: bool,
 }
 
 fn current_platform_id() -> &'static str {
@@ -848,6 +859,78 @@ async fn open_watch_window(
     )
 }
 
+fn is_valid_tmdb_endpoint(endpoint: &str) -> bool {
+    endpoint.starts_with('/')
+        && !endpoint.contains("..")
+        && !endpoint.contains("://")
+        && !endpoint.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+#[tauri::command]
+async fn tmdb_api_get(
+    endpoint: String,
+    query: Vec<(String, String)>,
+    api_key: String,
+    http_state: State<'_, HttpClientState>,
+) -> Result<TmdbProxyResponse, String> {
+    let trimmed_endpoint = endpoint.trim();
+    if !is_valid_tmdb_endpoint(trimmed_endpoint) {
+        return Err("Некорректный путь запроса к TMDB API.".to_string());
+    }
+
+    let trimmed_key = api_key.trim();
+    if trimmed_key.is_empty() {
+        return Ok(TmdbProxyResponse {
+            ok: false,
+            status: 401,
+            body: None,
+            network_error: false,
+            timed_out: false,
+        });
+    }
+
+    let full_url = format!("{}{}", TMDB_API_BASE_URL, trimmed_endpoint);
+    let mut query_params: Vec<(String, String)> = Vec::with_capacity(query.len() + 1);
+    query_params.push(("api_key".to_string(), trimmed_key.to_string()));
+    for (k, v) in query {
+        if !k.eq_ignore_ascii_case("api_key") {
+            query_params.push((k, v));
+        }
+    }
+
+    let response = match http_state
+        .client
+        .get(&full_url)
+        .query(&query_params)
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(err) => {
+            return Ok(TmdbProxyResponse {
+                ok: false,
+                status: 0,
+                body: None,
+                network_error: true,
+                timed_out: err.is_timeout(),
+            });
+        }
+    };
+
+    let status = response.status().as_u16();
+    let ok = response.status().is_success();
+    let body = response.text().await.ok();
+
+    Ok(TmdbProxyResponse {
+        ok,
+        status,
+        body,
+        network_error: false,
+        timed_out: false,
+    })
+}
+
 #[tauri::command]
 fn start_tv_pairing_server(
     app: tauri::AppHandle,
@@ -872,7 +955,7 @@ fn poll_tv_pairing_result(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -889,6 +972,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             fetch_kinopoisk_candidates,
+            tmdb_api_get,
             open_watch_window,
             check_player_browsers,
             check_firefox_available,
@@ -900,6 +984,7 @@ pub fn run() {
     #[cfg(not(desktop))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         fetch_kinopoisk_candidates,
+        tmdb_api_get,
         open_watch_window,
         check_player_browsers,
         check_firefox_available,

@@ -1,8 +1,9 @@
+use if_addrs::IfAddr;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -74,32 +75,122 @@ impl TvPairingState {
     }
 }
 
-fn detect_lan_ipv4() -> Option<Ipv4Addr> {
-    // UDP connect не отправляет сетевые пакеты, а лишь запрашивает у таблицы маршрутизации ОС
-    // локальный интерфейс для выхода в сеть (работает на Android, macOS и Windows без доп. прав).
+const IGNORED_INTERFACE_PREFIXES: &[&str] = &[
+    "tun",
+    "tap",
+    "utun",
+    "wg",
+    "ppp",
+    "rmnet",
+    "ccmni",
+    "dummy",
+    "v4-",
+    "docker",
+];
+
+const PREFERRED_LAN_PREFIXES: &[&str] = &[
+    "wlan",
+    "eth",
+    "en",
+    "wifi",
+    "wi-fi",
+    "ethernet",
+];
+
+fn is_ignored_interface_name(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower.is_empty() || lower == "lo" || lower == "lo0" {
+        return true;
+    }
+    IGNORED_INTERFACE_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+fn is_preferred_lan_interface_name(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    PREFERRED_LAN_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+fn is_usable_lan_ipv4(ip: Ipv4Addr) -> bool {
+    !ip.is_loopback()
+        && !ip.is_link_local()
+        && !ip.is_unspecified()
+        && !ip.is_broadcast()
+        && !ip.is_multicast()
+        && !ip.is_documentation()
+}
+
+fn is_vpn_gateway_10_0_0_1(ip: Ipv4Addr) -> bool {
+    ip == Ipv4Addr::new(10, 0, 0, 1)
+}
+
+fn lan_subnet_rank(ip: Ipv4Addr) -> u8 {
+    let [a, b, _, _] = ip.octets();
+    if a == 192 && b == 168 {
+        0 // 192.168.0.0/16 — наивысший приоритет домашней сети
+    } else if a == 172 && (16..=31).contains(&b) {
+        1 // 172.16.0.0/12
+    } else if a == 10 {
+        if is_vpn_gateway_10_0_0_1(ip) {
+            3 // 10.0.0.1 часто используется VPN-туннелем — ниже других LAN-адресов
+        } else {
+            2 // 10.0.0.0/8
+        }
+    } else {
+        4
+    }
+}
+
+/// Выбирает лучший локальный IPv4 из списка сетевых интерфейсов,
+/// игнорируя loopback, link-local и VPN/виртуальные интерфейсы.
+fn select_best_lan_ipv4(candidates: &[(String, Ipv4Addr)]) -> Option<Ipv4Addr> {
+    candidates
+        .iter()
+        .filter(|(name, ip)| !is_ignored_interface_name(name) && is_usable_lan_ipv4(*ip))
+        .min_by_key(|(name, ip)| {
+            let vpn_gw_penalty: u8 = if is_vpn_gateway_10_0_0_1(*ip) { 1 } else { 0 };
+            let iface_rank: u8 = if is_preferred_lan_interface_name(name) { 0 } else { 1 };
+            let subnet_rank = lan_subnet_rank(*ip);
+            (vpn_gw_penalty, iface_rank, subnet_rank)
+        })
+        .map(|(_, ip)| *ip)
+}
+
+fn detect_lan_ipv4_from_interfaces() -> Option<Ipv4Addr> {
+    let interfaces = if_addrs::get_if_addrs().ok()?;
+    let mut ipv4_candidates: Vec<(String, Ipv4Addr)> = Vec::new();
+
+    for iface in interfaces {
+        if let IfAddr::V4(v4) = iface.addr {
+            ipv4_candidates.push((iface.name, v4.ip));
+        }
+    }
+
+    select_best_lan_ipv4(&ipv4_candidates)
+}
+
+fn detect_lan_ipv4_udp_fallback() -> Option<Ipv4Addr> {
+    // Запасной вариант через таблицу маршрутизации ОС, если перебор интерфейсов не дал адреса
     let probes = [
-        "8.8.8.8:80",
-        "1.1.1.1:80",
         "192.168.1.1:80",
         "192.168.0.1:80",
-        "10.0.0.1:80",
         "172.16.0.1:80",
+        "10.0.0.1:80",
+        "8.8.8.8:80",
+        "1.1.1.1:80",
     ];
 
-    let mut fallback_ip: Option<Ipv4Addr> = None;
-
+    let mut collected: Vec<(String, Ipv4Addr)> = Vec::new();
     for target in probes {
         if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
             if socket.connect(target).is_ok() {
                 if let Ok(local_addr) = socket.local_addr() {
                     if let IpAddr::V4(ipv4) = local_addr.ip() {
-                        if !ipv4.is_loopback() && !ipv4.is_unspecified() && !ipv4.is_link_local() {
-                            if ipv4.is_private() {
-                                return Some(ipv4);
-                            }
-                            if fallback_ip.is_none() {
-                                fallback_ip = Some(ipv4);
-                            }
+                        if is_usable_lan_ipv4(ipv4) {
+                            collected.push(("fallback".to_string(), ipv4));
                         }
                     }
                 }
@@ -107,7 +198,11 @@ fn detect_lan_ipv4() -> Option<Ipv4Addr> {
         }
     }
 
-    fallback_ip
+    select_best_lan_ipv4(&collected)
+}
+
+fn detect_lan_ipv4() -> Option<Ipv4Addr> {
+    detect_lan_ipv4_from_interfaces().or_else(detect_lan_ipv4_udp_fallback)
 }
 
 fn generate_session_token() -> String {
@@ -266,12 +361,16 @@ fn validate_and_normalize_payload(raw: TvPairingPayload) -> Result<TvPairingPayl
 fn write_http_response(
     stream: &mut TcpStream,
     status_line: &str,
-    content_type: &str,
+    content_type: Option<&str>,
     body: &str,
 ) {
+    let content_type_header = match content_type {
+        Some(ct) => format!("Content-Type: {ct}\r\n"),
+        None => String::new(),
+    };
     let response = format!(
         "HTTP/1.1 {status_line}\r\n\
-Content-Type: {content_type}\r\n\
+{content_type_header}\
 Content-Length: {}\r\n\
 Cache-Control: no-store, no-cache, must-revalidate\r\n\
 Pragma: no-cache\r\n\
@@ -284,6 +383,7 @@ Connection: close\r\n\
     );
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
+    let _ = stream.shutdown(Shutdown::Write);
 }
 
 fn render_phone_form_html(token: &str) -> String {
@@ -748,7 +848,7 @@ fn handle_client(
         Ok(req) => req,
         Err((status, msg)) => {
             let html = render_status_html("Ошибка запроса", msg, true);
-            write_http_response(&mut stream, status, "text/html; charset=utf-8", &html);
+            write_http_response(&mut stream, status, Some("text/html; charset=utf-8"), &html);
             return;
         }
     };
@@ -758,13 +858,24 @@ fn handle_client(
         None => (target.as_str(), ""),
     };
 
+    // Фоновый запрос иконки от мобильного браузера отдаём чистым 204 No Content
+    if path == "/favicon.ico" {
+        write_http_response(&mut stream, "204 No Content", None, "");
+        return;
+    }
+
     if path != "/pair" {
         let html = render_status_html(
             "Страница не найдена",
             "Отсканируйте актуальный QR-код на экране настроек CineScope на телевизоре.",
             true,
         );
-        write_http_response(&mut stream, "404 Not Found", "text/html; charset=utf-8", &html);
+        write_http_response(
+            &mut stream,
+            "404 Not Found",
+            Some("text/html; charset=utf-8"),
+            &html,
+        );
         return;
     }
 
@@ -775,14 +886,27 @@ fn handle_client(
             "Токен QR-кода не совпадает или устарел. Нажмите «Обновить QR-код» на телевизоре и отсканируйте снова.",
             true,
         );
-        write_http_response(&mut stream, "403 Forbidden", "text/html; charset=utf-8", &html);
+        write_http_response(
+            &mut stream,
+            "403 Forbidden",
+            Some("text/html; charset=utf-8"),
+            &html,
+        );
         return;
     }
 
     match method.as_str() {
         "GET" => {
             let html = render_phone_form_html(expected_token);
-            write_http_response(&mut stream, "200 OK", "text/html; charset=utf-8", &html);
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                Some("text/html; charset=utf-8"),
+                &html,
+            );
+        }
+        "HEAD" => {
+            write_http_response(&mut stream, "200 OK", Some("text/html; charset=utf-8"), "");
         }
         "POST" => {
             let wants_json = content_type.contains("application/json");
@@ -806,7 +930,7 @@ fn handle_client(
                         write_http_response(
                             &mut stream,
                             "200 OK",
-                            "application/json; charset=utf-8",
+                            Some("application/json; charset=utf-8"),
                             &json,
                         );
                     } else {
@@ -818,7 +942,7 @@ fn handle_client(
                         write_http_response(
                             &mut stream,
                             "200 OK",
-                            "text/html; charset=utf-8",
+                            Some("text/html; charset=utf-8"),
                             &html,
                         );
                     }
@@ -832,7 +956,7 @@ fn handle_client(
                         write_http_response(
                             &mut stream,
                             "400 Bad Request",
-                            "application/json; charset=utf-8",
+                            Some("application/json; charset=utf-8"),
                             &json,
                         );
                     } else {
@@ -840,7 +964,7 @@ fn handle_client(
                         write_http_response(
                             &mut stream,
                             "400 Bad Request",
-                            "text/html; charset=utf-8",
+                            Some("text/html; charset=utf-8"),
                             &html,
                         );
                     }
@@ -848,11 +972,15 @@ fn handle_client(
             }
         }
         _ => {
-            let html = render_status_html("Метод не поддерживается", "Используйте форму на странице QR-кода.", true);
+            let html = render_status_html(
+                "Метод не поддерживается",
+                "Используйте форму на странице QR-кода.",
+                true,
+            );
             write_http_response(
                 &mut stream,
                 "405 Method Not Allowed",
-                "text/html; charset=utf-8",
+                Some("text/html; charset=utf-8"),
                 &html,
             );
         }
@@ -1038,5 +1166,51 @@ mod tests {
         let parsed = parse_form_payload("tmdbApiKey=key_123&kinopoiskApiKey=uuid-456%2D789");
         assert_eq!(parsed.tmdb_api_key, "key_123");
         assert_eq!(parsed.kinopoisk_api_key, "uuid-456-789");
+    }
+
+    #[test]
+    fn select_best_lan_ipv4_ignores_vpn_and_virtual_interfaces() {
+        let candidates = vec![
+            ("lo".to_string(), Ipv4Addr::new(127, 0, 0, 1)),
+            ("tun0".to_string(), Ipv4Addr::new(10, 0, 0, 1)),
+            ("wg0".to_string(), Ipv4Addr::new(10, 8, 0, 2)),
+            ("rmnet_data0".to_string(), Ipv4Addr::new(10, 120, 4, 15)),
+            ("docker0".to_string(), Ipv4Addr::new(172, 17, 0, 1)),
+            ("wlan0".to_string(), Ipv4Addr::new(192, 168, 1, 42)),
+        ];
+        assert_eq!(
+            select_best_lan_ipv4(&candidates),
+            Some(Ipv4Addr::new(192, 168, 1, 42))
+        );
+    }
+
+    #[test]
+    fn select_best_lan_ipv4_prefers_private_subnet_order_and_avoids_10_0_0_1() {
+        let subnet_priority = vec![
+            ("eth0".to_string(), Ipv4Addr::new(10, 0, 0, 50)),
+            ("wlan0".to_string(), Ipv4Addr::new(172, 16, 12, 8)),
+            ("en0".to_string(), Ipv4Addr::new(192, 168, 0, 105)),
+        ];
+        assert_eq!(
+            select_best_lan_ipv4(&subnet_priority),
+            Some(Ipv4Addr::new(192, 168, 0, 105))
+        );
+
+        let avoid_vpn_gw = vec![
+            ("wlan0".to_string(), Ipv4Addr::new(10, 0, 0, 1)),
+            ("br0".to_string(), Ipv4Addr::new(10, 0, 0, 24)),
+        ];
+        assert_eq!(
+            select_best_lan_ipv4(&avoid_vpn_gw),
+            Some(Ipv4Addr::new(10, 0, 0, 24))
+        );
+
+        let only_virtual = vec![
+            ("tun0".to_string(), Ipv4Addr::new(10, 0, 0, 1)),
+            ("utun3".to_string(), Ipv4Addr::new(192, 168, 50, 2)),
+            ("v4-rmnet0".to_string(), Ipv4Addr::new(192, 0, 0, 4)),
+            ("wlan0".to_string(), Ipv4Addr::new(169, 254, 12, 34)),
+        ];
+        assert_eq!(select_best_lan_ipv4(&only_virtual), None);
     }
 }

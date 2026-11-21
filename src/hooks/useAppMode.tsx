@@ -36,7 +36,7 @@ interface AppModeContextValue {
   settingsModalOpen: boolean;
   openSettingsModal: () => void;
   closeSettingsModal: () => void;
-  saveApiKeys: (next: StoredApiKeys) => void;
+  saveApiKeys: (next: StoredApiKeys, options?: { keepOpen?: boolean }) => void;
   clearApiKeys: () => void;
   enterDemoMode: () => void;
   exitDemoMode: () => void;
@@ -117,22 +117,29 @@ export function AppModeProvider({ children }: { children: ReactNode }) {
     setSettingsModalOpen(true);
   }, []);
 
-  const saveApiKeys = useCallback((next: StoredApiKeys) => {
-    const prevKp = getStoredApiKeys().kinopoiskApiKey;
-    const saved = saveStoredApiKeys(next);
-    if (prevKp !== saved.kinopoiskApiKey) {
-      clearKinopoiskClientCache();
-    }
-    if (saved.tmdbApiKey) {
-      setDemoChoice(false);
-      try {
-        localStorage.removeItem(DEMO_MODE_STORAGE_KEY);
-      } catch {
-        // игнорируем ошибку localStorage
+  const saveApiKeys = useCallback(
+    (next: StoredApiKeys, options?: { keepOpen?: boolean }) => {
+      const prevKp = getStoredApiKeys().kinopoiskApiKey;
+      const saved = saveStoredApiKeys(next);
+      if (prevKp !== saved.kinopoiskApiKey) {
+        clearKinopoiskClientCache();
       }
-    }
-    setSettingsModalOpen(false);
-  }, []);
+      if (saved.tmdbApiKey) {
+        setDemoChoice(false);
+        try {
+          localStorage.removeItem(DEMO_MODE_STORAGE_KEY);
+        } catch {
+          // игнорируем ошибку localStorage
+        }
+      }
+      if (options?.keepOpen) {
+        setSettingsModalOpen(true);
+      } else {
+        setSettingsModalOpen(false);
+      }
+    },
+    [],
+  );
 
   const clearApiKeys = useCallback(() => {
     clearStoredApiKeys();

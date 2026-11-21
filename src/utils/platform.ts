@@ -86,6 +86,56 @@ export function isStandalonePwa(): boolean {
   );
 }
 
+export function isAndroidUserAgent(userAgent: string): boolean {
+  return /\bandroid\b/i.test(userAgent);
+}
+
+export function isAndroidTvUserAgent(userAgent: string): boolean {
+  const ua = userAgent.toLowerCase();
+  if (!ua) return false;
+  return (
+    ua.includes('sberbox') ||
+    ua.includes('salutetv') ||
+    ua.includes('salute tv') ||
+    ua.includes('staros') ||
+    ua.includes('android tv') ||
+    ua.includes('googletv') ||
+    ua.includes('smarttv') ||
+    ua.includes('smart-tv') ||
+    ua.includes('aftb') ||
+    ua.includes('aftm') ||
+    ua.includes('aftt') ||
+    ua.includes('afts') ||
+    ua.includes('mibox') ||
+    ua.includes('bravia') ||
+    ua.includes('shield android tv') ||
+    (ua.includes('android') && /\btv\b/.test(ua))
+  );
+}
+
+export function isAndroidTauri(): boolean {
+  if (!isTauriRuntime()) return false;
+  if (typeof navigator === 'undefined') return false;
+  return isAndroidUserAgent(navigator.userAgent ?? '');
+}
+
+export function isTvMode(): boolean {
+  const env = (
+    import.meta as ImportMeta & { env?: Record<string, string | boolean | undefined> }
+  ).env;
+  if (env?.VITE_TV_MODE === 'true') {
+    return true;
+  }
+  if (typeof navigator !== 'undefined') {
+    return isAndroidTvUserAgent(navigator.userAgent ?? '');
+  }
+  return false;
+}
+
+export function isDesktopTauriRuntime(): boolean {
+  return isTauriRuntime() && !isAndroidTauri() && !isTvMode();
+}
+
 export function getRouterMode(isTauriEnv: boolean): 'hash' | 'browser' {
   return isTauriEnv ? 'hash' : 'browser';
 }

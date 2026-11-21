@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useAppMode } from '../../hooks/useAppMode';
+import { useTvNavigation } from '../../hooks/useTvNavigation';
 import { ApiSettingsModal } from '../settings/ApiSettingsModal';
 import { Toast } from '../ui/Toast';
 import { Header } from './Header';
@@ -8,6 +9,7 @@ import { MobileNav } from './MobileNav';
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { isDemoMode, hasApiKey, openSettingsModal } = useAppMode();
+  useTvNavigation();
 
   return (
     <div className="flex min-h-dvh flex-col overflow-x-clip bg-[#F6F7FA] text-slate-900 dark:bg-[#090B10] dark:text-[#F3F5F9]">
@@ -22,7 +24,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={openSettingsModal}
-              className="font-semibold underline underline-offset-2 hover:opacity-80"
+              className="rounded-md px-2 py-0.5 font-semibold underline underline-offset-2 hover:opacity-80"
             >
               Ввести API-ключ
             </button>
@@ -30,7 +32,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       ) : null}
 
-      <main className="safe-px safe-main-pb mx-auto w-full max-w-7xl flex-1 px-4 pt-6 sm:px-6 lg:px-8">
+      <main className="safe-px safe-main-pb tv-main-overscan mx-auto w-full max-w-7xl flex-1 px-4 pt-6 sm:px-6 lg:px-8">
         {children}
       </main>
 

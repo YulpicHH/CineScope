@@ -35,7 +35,7 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="safe-modal-inset fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 backdrop-blur-sm"
+      className="safe-modal-inset tv-modal-overscan fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
@@ -52,6 +52,7 @@ export function ConfirmDialog({
             type="button"
             onClick={onCancel}
             aria-label="Закрыть окно"
+            data-tv-modal-close="true"
             className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-white"
           >
             <X className="h-4 w-4" />

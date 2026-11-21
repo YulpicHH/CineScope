@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Bookmark, Check, Heart, Star, Trash2 } from 'lucide-react';
 import { useLibrary } from '../../hooks/useLibrary';
 import type { MediaItem } from '../../types';
+import { isTvMode } from '../../utils/platform';
 import { PosterArtwork } from '../ui/PosterArtwork';
 
 interface MediaCardProps {
@@ -22,6 +23,7 @@ export const MediaCard = memo(function MediaCard({
 }: MediaCardProps) {
   const { getEntry, toggleWatchlist, toggleFavorite } = useLibrary();
   const entry = getEntry(item.id, item.mediaType);
+  const tvMode = isTvMode();
 
   const isWatchlist = entry?.status === 'watchlist';
   const isWatched = entry?.status === 'watched';
@@ -41,10 +43,11 @@ export const MediaCard = memo(function MediaCard({
         compact ? 'w-[162px] shrink-0 sm:w-[186px]' : 'w-full'
       }`}
     >
-      <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100 dark:border-white/[0.08] dark:bg-[#11151E]">
+      <div className="relative aspect-[2/3] w-full rounded-xl">
         <Link
           to={`/title/${item.mediaType}/${item.id}`}
-          className="block h-full w-full focus-visible:outline-2 focus-visible:outline-blue-500"
+          data-tv-focusable="true"
+          className="block h-full w-full overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100 focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-white/[0.08] dark:bg-[#11151E]"
         >
           <PosterArtwork
             posterPath={item.posterPath}
@@ -57,82 +60,89 @@ export const MediaCard = memo(function MediaCard({
         </Link>
 
         {/* Быстрые действия на карточке (без backdrop-blur для плавного скролла в WKWebView) */}
-        <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5 opacity-100 transition-opacity duration-150 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
-          <button
-            type="button"
-            onClick={() => toggleWatchlist(item)}
-            aria-label={
-              isWatchlist
-                ? `Убрать «${item.title}» из списка «Посмотреть позже»`
-                : `Добавить «${item.title}» в список «Посмотреть позже»`
-            }
-            title={isWatchlist ? 'В списке «Посмотреть позже»' : 'Посмотреть позже'}
-            className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
-              isWatchlist
-                ? 'border-blue-400/50 bg-blue-600 text-white'
-                : isWatched
-                  ? 'border-emerald-400/50 bg-emerald-600 text-white'
-                  : 'border-white/20 bg-black/75 text-white hover:bg-black/90'
-            }`}
-          >
-            {isWatched ? (
-              <Check className="h-4 w-4" aria-hidden="true" />
-            ) : (
-              <Bookmark
-                className="h-4 w-4"
-                fill={isWatchlist ? 'currentColor' : 'none'}
-                aria-hidden="true"
-              />
-            )}
-          </button>
+        {!tvMode || onRemove ? (
+          <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5 opacity-100 transition-opacity duration-150 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+            {!tvMode ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => toggleWatchlist(item)}
+                  aria-label={
+                    isWatchlist
+                      ? `Убрать «${item.title}» из списка «Посмотреть позже»`
+                      : `Добавить «${item.title}» в список «Посмотреть позже»`
+                  }
+                  title={isWatchlist ? 'В списке «Посмотреть позже»' : 'Посмотреть позже'}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
+                    isWatchlist
+                      ? 'border-blue-400/50 bg-blue-600 text-white'
+                      : isWatched
+                        ? 'border-emerald-400/50 bg-emerald-600 text-white'
+                        : 'border-white/20 bg-black/75 text-white hover:bg-black/90'
+                  }`}
+                >
+                  {isWatched ? (
+                    <Check className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Bookmark
+                      className="h-4 w-4"
+                      fill={isWatchlist ? 'currentColor' : 'none'}
+                      aria-hidden="true"
+                    />
+                  )}
+                </button>
 
-          <button
-            type="button"
-            onClick={() => toggleFavorite(item)}
-            aria-label={
-              isFavorite
-                ? `Убрать «${item.title}» из избранного`
-                : `Добавить «${item.title}» в избранное`
-            }
-            title={isFavorite ? 'В избранном' : 'В избранное'}
-            className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
-              isFavorite
-                ? 'border-violet-400/50 bg-violet-600 text-white'
-                : 'border-white/20 bg-black/75 text-white hover:bg-black/90'
-            }`}
-          >
-            <Heart
-              className="h-4 w-4"
-              fill={isFavorite ? 'currentColor' : 'none'}
-              aria-hidden="true"
-            />
-          </button>
+                <button
+                  type="button"
+                  onClick={() => toggleFavorite(item)}
+                  aria-label={
+                    isFavorite
+                      ? `Убрать «${item.title}» из избранного`
+                      : `Добавить «${item.title}» в избранное`
+                  }
+                  title={isFavorite ? 'В избранном' : 'В избранное'}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
+                    isFavorite
+                      ? 'border-violet-400/50 bg-violet-600 text-white'
+                      : 'border-white/20 bg-black/75 text-white hover:bg-black/90'
+                  }`}
+                >
+                  <Heart
+                    className="h-4 w-4"
+                    fill={isFavorite ? 'currentColor' : 'none'}
+                    aria-hidden="true"
+                  />
+                </button>
+              </>
+            ) : null}
 
-          {onRemove ? (
-            <button
-              type="button"
-              data-testid="card-remove-button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onRemove(item);
-              }}
-              aria-label={
-                removeLabel
-                  ? `${removeLabel}: ${item.title}`
-                  : `Удалить «${item.title}»`
-              }
-              title={removeLabel ?? 'Удалить'}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/20 bg-black/75 text-white transition-colors hover:border-rose-400/60 hover:bg-rose-600 focus-visible:outline-2 focus-visible:outline-rose-500"
-            >
-              <Trash2 className="h-4 w-4" aria-hidden="true" />
-            </button>
-          ) : null}
-        </div>
+            {onRemove ? (
+              <button
+                type="button"
+                data-testid="card-remove-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemove(item);
+                }}
+                aria-label={
+                  removeLabel
+                    ? `${removeLabel}: ${item.title}`
+                    : `Удалить «${item.title}»`
+                }
+                title={removeLabel ?? 'Удалить'}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/20 bg-black/75 text-white transition-colors hover:border-rose-400/60 hover:bg-rose-600 focus-visible:outline-2 focus-visible:outline-rose-500"
+              >
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-2.5 flex flex-col gap-1">
         <Link
           to={`/title/${item.mediaType}/${item.id}`}
+          tabIndex={tvMode ? -1 : undefined}
           className="font-display line-clamp-1 text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-slate-100 dark:hover:text-blue-400"
         >
           {item.title}

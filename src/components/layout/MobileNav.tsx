@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { Bookmark, Clock, Compass, Home, Settings } from 'lucide-react';
 import { useAppMode } from '../../hooks/useAppMode';
+import { isTvMode } from '../../utils/platform';
 
 const MOBILE_TABS = [
   { to: '/', label: 'Главная', icon: Home, end: true },
@@ -11,6 +12,10 @@ const MOBILE_TABS = [
 
 export function MobileNav() {
   const { openSettingsModal, settingsModalOpen } = useAppMode();
+
+  if (isTvMode()) {
+    return null;
+  }
 
   return (
     <nav

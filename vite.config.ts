@@ -41,8 +41,13 @@ export default defineConfig(() => {
       },
     },
     build: {
-      // Современный таргет для macOS WKWebView (Safari 15+) и Windows WebView2
-      target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari15',
+      // Современный таргет для macOS WKWebView (Safari 15+), Windows WebView2 и Android TV WebView
+      target:
+        process.env.TAURI_ENV_PLATFORM === 'windows'
+          ? 'chrome105'
+          : process.env.TAURI_ENV_PLATFORM === 'android'
+            ? 'chrome87'
+            : 'safari15',
       sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
       cssMinify: true,
       rollupOptions: {

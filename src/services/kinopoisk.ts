@@ -7,7 +7,11 @@ import {
   type KinopoiskApiCandidate,
   type KinopoiskCacheRecord,
 } from '../utils/kinopoiskMatcher';
-import { isTauriRuntime, openExternalUrl } from '../utils/platform';
+import {
+  isDesktopTauriRuntime,
+  isTauriRuntime,
+  openExternalUrl,
+} from '../utils/platform';
 import type { PlayerModeId } from '../utils/playerProfile';
 import { getKinopoiskApiKeyValue } from './apiKeys';
 import { getPlayerMode } from './playerSettings';
@@ -453,7 +457,7 @@ export async function openWatchWindow(
   const trimmedUrl = url.trim();
   if (!trimmedUrl) return;
 
-  if (isTauriRuntime()) {
+  if (isDesktopTauriRuntime()) {
     const resolvedMode = playerMode ?? getPlayerMode();
     await invoke('open_watch_window', {
       url: trimmedUrl,

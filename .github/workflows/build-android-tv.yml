@@ -1,0 +1,221 @@
+name: Build Android TV / SberBox (.apk)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Тег релиза (например, v1.2.0-tv; если пусто — v1.0.0-tv.<номер запуска>)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-tv:
+    name: Build & Sign Android TV APK (SberBox)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          INPUT_TAG="${{ github.event.inputs.release_tag }}"
+          if [[ -n "${INPUT_TAG}" ]]; then
+            TAG="${INPUT_TAG}"
+          else
+            TAG="v1.0.0-tv.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK, Build-Tools & Platform SDK
+        shell: bash
+        run: |
+          NDK_VERSION="27.2.12479018"
+          BUILD_TOOLS_VERSION="35.0.0"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;${BUILD_TOOLS_VERSION}" \
+            "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Install Rust stable (Android ARMv7 + ARM64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: |
+            armv7-linux-androideabi
+            aarch64-linux-android
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Ensure ImageMagick is available for TV banner generation
+        shell: bash
+        run: |
+          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y imagemagick
+          fi
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Run TypeScript check and unit tests
+        run: |
+          npm run lint
+          npm test
+
+      - name: Ensure Tauri app icons exist
+        shell: bash
+        run: |
+          if [ ! -f src-tauri/icons/128x128@2x.png ]; then
+            if [ -f assets/app-icon.png ]; then
+              npx tauri icon assets/app-icon.png
+            else
+              echo "Ошибка: не найден файл assets/app-icon.png для генерации иконок."
+              exit 1
+            fi
+          fi
+
+      - name: Initialize Tauri Android project
+        run: npx tauri android init --ci --skip-targets-install
+
+      - name: Patch AndroidManifest.xml & generate 320x180 TV banner
+        run: node scripts/prepare-android-tv.mjs
+
+      - name: Build universal ARM release APK (armv7 + aarch64, TV mode, BYOK)
+        env:
+          VITE_TV_MODE: 'true'
+          CI: 'true'
+        run: npx tauri android build --apk --target armv7 --target aarch64 --ci
+
+      - name: Align and sign APK for SberBox (apps.sber.ru/my)
+        id: sign
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          KEYSTORE_PATH="/tmp/cinescope-release.keystore"
+          ALIGNED_APK="/tmp/cinescope-aligned.apk"
+          cleanup() {
+            rm -f "${KEYSTORE_PATH}" "${ALIGNED_APK}"
+          }
+          trap cleanup EXIT
+
+          APK_ROOT="src-tauri/gen/android/app/build/outputs/apk"
+          SOURCE_APK="$(find "${APK_ROOT}" -type f -name '*universal*release*.apk' | head -n 1 || true)"
+          if [[ -z "${SOURCE_APK}" ]]; then
+            SOURCE_APK="$(find "${APK_ROOT}" -type f -name '*release*.apk' | head -n 1 || true)"
+          fi
+          if [[ -z "${SOURCE_APK}" ]]; then
+            echo "Ошибка: собранный release APK не найден в ${APK_ROOT}"
+            find "${APK_ROOT}" -maxdepth 4 -ls || true
+            exit 1
+          fi
+          echo "Found release APK: ${SOURCE_APK}"
+
+          if [[ -n "${ANDROID_KEYSTORE_BASE64}" && -n "${ANDROID_KEYSTORE_PASSWORD}" && -n "${ANDROID_KEY_ALIAS}" && -n "${ANDROID_KEY_PASSWORD}" ]]; then
+            echo "Using repository release keystore from GitHub Secrets."
+            printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${KEYSTORE_PATH}"
+            chmod 600 "${KEYSTORE_PATH}"
+            export KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
+            export KEY_PASS="${ANDROID_KEY_PASSWORD}"
+            KEY_ALIAS="${ANDROID_KEY_ALIAS}"
+            echo "signing_mode=custom-secret" >> "$GITHUB_OUTPUT"
+          else
+            echo "Repository keystore secrets are not set — generating valid CI release keystore via keytool."
+            GEN_PASS="$(openssl rand -hex 16)"
+            export KS_PASS="${GEN_PASS}"
+            export KEY_PASS="${GEN_PASS}"
+            KEY_ALIAS="cinescope-tv"
+            keytool -genkeypair -v \
+              -keystore "${KEYSTORE_PATH}" \
+              -storetype PKCS12 \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -alias "${KEY_ALIAS}" \
+              -storepass "${KS_PASS}" \
+              -keypass "${KEY_PASS}" \
+              -dname "CN=CineScope, OU=SmartTV, O=CineScope, L=Moscow, S=Moscow, C=RU"
+            chmod 600 "${KEYSTORE_PATH}"
+            echo "signing_mode=ephemeral-ci" >> "$GITHUB_OUTPUT"
+          fi
+
+          mkdir -p release-assets
+          FINAL_APK="release-assets/CineScope-sberbox-tv.apk"
+
+          zipalign -p -f 4 "${SOURCE_APK}" "${ALIGNED_APK}"
+
+          apksigner sign \
+            --ks "${KEYSTORE_PATH}" \
+            --ks-key-alias "${KEY_ALIAS}" \
+            --ks-pass "env:KS_PASS" \
+            --key-pass "env:KEY_PASS" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out "${FINAL_APK}" \
+            "${ALIGNED_APK}"
+
+          apksigner verify --verbose "${FINAL_APK}"
+          ls -lh "${FINAL_APK}"
+
+      - name: Upload signed APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinescope-sberbox-tv-apk
+          path: release-assets/CineScope-sberbox-tv.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: CineScope ${{ steps.meta.outputs.tag }} (SberBox / Android TV)
+          draft: false
+          prerelease: false
+          files: release-assets/CineScope-sberbox-tv.apk
+          body: |
+            ## CineScope для SberBox (Салют ТВ / Android TV)
+
+            - **Файл:** `CineScope-sberbox-tv.apk` (универсальный подписанный ARM-пакет: `armeabi-v7a` + `arm64-v8a`).
+            - **Управление:** полная поддержка пульта (D-Pad: стрелки, «ОК» / Enter, «Назад»), крупная рамка фокуса для 10-foot UI и безопасные отступы от краёв экрана (overscan).
+            - **BYOK:** личные API-ключи не вшиты в APK — при первом запуске введите свой ключ **TMDB API (v3)** и при желании **Kinopoisk Unofficial API** (удобно вводить со смартфона через приложение «Салют»).
+            - **Просмотр:** кнопка **«Смотреть»** открывает плеер во встроенном системном браузере приставки с поддержкой пульта и полноэкранного режима.
+
+            ### Установка на SberBox
+            1. Скачайте `CineScope-sberbox-tv.apk` из раздела **Assets** ниже.
+            2. Откройте [apps.sber.ru/my](https://apps.sber.ru/my), войдите в свой Сбер ID и загрузите `.apk` в «Мои приложения».
+            3. Дождитесь завершения проверки и синхронизации — иконка **CineScope** появится в разделе «Мои приложения» на SberBox.

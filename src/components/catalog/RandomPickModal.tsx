@@ -50,7 +50,7 @@ export function RandomPickModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="random-pick-title"
-      className="safe-modal-inset fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70"
+      className="safe-modal-inset tv-modal-overscan fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -76,6 +76,7 @@ export function RandomPickModal({
             type="button"
             onClick={onClose}
             aria-label="Закрыть окно случайного выбора"
+            data-tv-modal-close="true"
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-white"
           >
             <X className="h-5 w-5" aria-hidden="true" />

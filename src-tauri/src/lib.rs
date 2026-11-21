@@ -5,22 +5,31 @@ use std::fs;
 use std::os::windows::process::CommandExt;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::path::{Path, PathBuf};
+#[cfg(desktop)]
 use std::process::Child;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::{Command, Stdio};
+#[cfg(desktop)]
 use std::sync::Mutex;
 use std::time::Duration;
 #[cfg(desktop)]
-use tauri::{webview::NewWindowResponse, Theme};
-use tauri::{Manager, RunEvent, State, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    webview::NewWindowResponse, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder,
+};
+use tauri::State;
 use tauri_plugin_http::reqwest;
 
 const KINOPOISK_API_URL: &str = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
+#[cfg(desktop)]
 const PLAYER_WINDOW_LABEL: &str = "player";
 
+#[cfg(desktop)]
 const PLAYER_MODE_FIREFOX: &str = "firefox_window";
+#[cfg(desktop)]
 const PLAYER_MODE_CHROME: &str = "chrome_window";
+#[cfg(desktop)]
 const PLAYER_MODE_EDGE: &str = "edge_window";
+#[cfg(desktop)]
 const PLAYER_MODE_EMBEDDED: &str = "embedded_webkit";
 
 #[cfg(target_os = "windows")]
@@ -30,6 +39,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const UA_DESKTOP_SAFARI_MACOS: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
 
+#[cfg(desktop)]
 const PLAYER_POPUP_BLOCK_SCRIPT: &str = r#"
 (() => {
   if (window.__cinescopePopupGuardInstalled) return;
@@ -147,6 +157,7 @@ struct HttpClientState {
     client: reqwest::Client,
 }
 
+#[cfg(desktop)]
 struct PlayerWindowState {
     browser_child: Mutex<Option<Child>>,
 }
@@ -201,12 +212,26 @@ fn current_platform_id() -> &'static str {
     {
         "macos"
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
+    #[cfg(target_os = "ios")]
+    {
+        "ios"
+    }
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    )))]
     {
         "linux"
     }
 }
 
+#[cfg(desktop)]
 fn default_player_mode() -> &'static str {
     #[cfg(target_os = "windows")]
     {
@@ -435,6 +460,7 @@ fn cleanup_chromium_lock_artifacts(profile_dir: &Path) {
     }
 }
 
+#[cfg(desktop)]
 fn terminate_browser_player(player_state: &PlayerWindowState) {
     let existing_child = match player_state.browser_child.lock() {
         Ok(mut guard) => guard.take(),
@@ -452,6 +478,7 @@ fn terminate_browser_player(player_state: &PlayerWindowState) {
     }
 }
 
+#[cfg(desktop)]
 fn normalize_player_mode(raw: Option<&str>) -> &'static str {
     match raw.map(str::trim) {
         Some(PLAYER_MODE_FIREFOX) | Some("firefox_4k") => PLAYER_MODE_FIREFOX,
@@ -652,6 +679,7 @@ fn launch_chromium_app_window(
     Ok(())
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn open_watch_window(
     app: tauri::AppHandle,
@@ -801,6 +829,19 @@ async fn open_watch_window(
     Ok(())
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+async fn open_watch_window(
+    _url: String,
+    _title: String,
+    _player_mode: Option<String>,
+) -> Result<(), String> {
+    Err(
+        "Встроенное десктопное окно плеера недоступно на Android TV. Используйте системный браузер приставки."
+            .to_string(),
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let client = reqwest::Client::builder()
@@ -808,22 +849,36 @@ pub fn run() {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(HttpClientState { client })
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init());
+
+    #[cfg(desktop)]
+    let builder = builder
         .manage(PlayerWindowState {
             browser_child: Mutex::new(None),
         })
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             fetch_kinopoisk_candidates,
             open_watch_window,
             check_player_browsers,
             check_firefox_available
-        ])
+        ]);
+
+    #[cfg(not(desktop))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        fetch_kinopoisk_candidates,
+        open_watch_window,
+        check_player_browsers,
+        check_firefox_available
+    ]);
+
+    let app = builder
         .build(tauri::generate_context!())
         .expect("error while building CineScope application");
 
+    #[cfg(desktop)]
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
             if let Some(player_state) = app_handle.try_state::<PlayerWindowState>() {
@@ -831,4 +886,7 @@ pub fn run() {
             }
         }
     });
+
+    #[cfg(not(desktop))]
+    app.run(|_app_handle, _event| {});
 }

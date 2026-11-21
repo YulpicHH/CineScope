@@ -29,7 +29,9 @@ import {
 import { hasInternalWhitespace } from '../../utils/apiKeysRules';
 import {
   detectClientPlatform,
+  isDesktopTauriRuntime,
   isTauriRuntime,
+  isTvMode,
   openExternalUrl,
   type DesktopPlatform,
 } from '../../utils/platform';
@@ -78,7 +80,9 @@ export function ApiSettingsModal() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const prevOpenRef = useRef(false);
-  const isDesktopTauri = isTauriRuntime();
+  const isDesktopTauri = isDesktopTauriRuntime();
+  const isAnyTauri = isTauriRuntime();
+  const tvMode = isTvMode();
   const { isIOSSafari, canPromptInstall, triggerInstall } = usePWAInstall();
 
   useEffect(() => {
@@ -211,7 +215,7 @@ export function ApiSettingsModal() {
 
   return (
     <div
-      className="safe-modal-inset fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/75 backdrop-blur-sm"
+      className="safe-modal-inset tv-modal-overscan fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/75 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="api-settings-modal-title"
@@ -256,6 +260,7 @@ export function ApiSettingsModal() {
               disabled={validating}
               aria-label="Закрыть настройки"
               data-testid="close-api-settings-button"
+              data-tv-modal-close="true"
               className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
             >
               <X className="h-4 w-4" aria-hidden="true" />
@@ -289,6 +294,7 @@ export function ApiSettingsModal() {
               <input
                 id="tmdb-api-key-input"
                 data-testid="tmdb-api-key-input"
+                data-tv-autofocus="true"
                 type={showTmdbKey ? 'text' : 'password'}
                 value={tmdbInput}
                 onChange={(e) => {
@@ -580,8 +586,8 @@ export function ApiSettingsModal() {
             </button>
           </div>
 
-          {/* Подсказка установки PWA на экран «Домой» (только в веб-браузере вне standalone и вне Tauri) */}
-          {!isDesktopTauri && (isIOSSafari || canPromptInstall) ? (
+          {/* Подсказка установки PWA на экран «Домой» (только в веб-браузере вне standalone, вне Tauri и вне ТВ-режима) */}
+          {!isAnyTauri && !tvMode && (isIOSSafari || canPromptInstall) ? (
             <div
               data-testid="pwa-install-hint"
               className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-white/10 bg-[#090B10] px-3.5 py-2.5 text-xs text-slate-300"

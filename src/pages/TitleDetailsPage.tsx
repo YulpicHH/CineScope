@@ -33,7 +33,12 @@ import {
   formatVoteCount,
 } from '../utils/formatters';
 import { buildProfileImageProps } from '../utils/imageUrl';
-import { isTauriRuntime, openExternalUrl } from '../utils/platform';
+import {
+  isAndroidTauri,
+  isDesktopTauriRuntime,
+  isTvMode,
+  openExternalUrl,
+} from '../utils/platform';
 
 type WatchResolutionState =
   | { status: 'idle' | 'loading' }
@@ -186,7 +191,7 @@ export function TitleDetailsPage() {
         </div>
 
         <div className="relative z-10 grid gap-6 p-5 sm:p-8 md:grid-cols-[220px_1fr] lg:grid-cols-[250px_1fr] lg:gap-8 lg:p-10">
-          <div className="mx-auto w-44 shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-2xl md:mx-0 md:w-full">
+          <div className="mx-auto w-44 shrink-0 self-start overflow-hidden rounded-xl border border-white/15 shadow-2xl md:mx-0 md:w-full">
             <div className="aspect-[2/3]">
               <PosterArtwork
                 posterPath={item.posterPath}
@@ -295,11 +300,12 @@ export function TitleDetailsPage() {
             <div className="space-y-4 border-t border-white/10 pt-4">
               <div className="flex flex-wrap items-center gap-3">
                 {watchState.status === 'matched' ? (
-                  isTauriRuntime() ? (
+                  isDesktopTauriRuntime() ? (
                     <div className="inline-flex items-center gap-2">
                       <button
                         type="button"
                         data-testid="watch-kinokino-link"
+                        data-tv-autofocus="true"
                         onClick={() => {
                           setWatchWindowError(null);
                           markWatching(item);
@@ -336,12 +342,39 @@ export function TitleDetailsPage() {
                         <ExternalLink className="h-4 w-4" aria-hidden="true" />
                       </button>
                     </div>
+                  ) : isAndroidTauri() || isTvMode() ? (
+                    <button
+                      type="button"
+                      data-testid="watch-kinokino-link"
+                      data-tv-autofocus="true"
+                      onClick={() => {
+                        setWatchWindowError(null);
+                        markWatching(item);
+                        void openExternalUrl(watchState.url).catch(
+                          (err: unknown) => {
+                            setWatchWindowError(
+                              typeof err === 'string'
+                                ? err
+                                : err instanceof Error
+                                  ? err.message
+                                  : 'Не удалось открыть ссылку в браузере приставки.',
+                            );
+                          },
+                        );
+                      }}
+                      className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
+                    >
+                      <Play className="h-4 w-4 fill-current" aria-hidden="true" />
+                      Смотреть
+                      <ExternalLink className="h-3.5 w-3.5 opacity-80" aria-hidden="true" />
+                    </button>
                   ) : (
                     <a
                       href={watchState.url}
                       target="_blank"
                       rel="noopener noreferrer"
                       data-testid="watch-kinokino-link"
+                      data-tv-autofocus="true"
                       onClick={() => {
                         markWatching(item);
                       }}
@@ -361,6 +394,7 @@ export function TitleDetailsPage() {
                   <button
                     type="button"
                     data-testid="watch-missing-key-button"
+                    data-tv-autofocus="true"
                     onClick={() => setMissingKeyNotice(true)}
                     className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
                   >
@@ -373,6 +407,12 @@ export function TitleDetailsPage() {
                   type="button"
                   onClick={() => toggleWatchlist(item)}
                   aria-pressed={isWatchlist}
+                  data-tv-autofocus={
+                    watchState.status !== 'matched' &&
+                    watchState.status !== 'missing_key'
+                      ? 'true'
+                      : undefined
+                  }
                   className={`inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
                     isWatchlist
                       ? 'bg-blue-600 text-white hover:bg-blue-700'

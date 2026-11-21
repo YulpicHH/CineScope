@@ -5,6 +5,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 
 const ADBLOCK_RS_PATH = path.resolve(process.cwd(), 'src-tauri/src/adblock.rs');
+const LIB_RS_PATH = path.resolve(process.cwd(), 'src-tauri/src/lib.rs');
 
 function extractAdblockArtifacts(): { domains: string[]; guardScript: string } {
   const source = fs.readFileSync(ADBLOCK_RS_PATH, 'utf8');
@@ -63,8 +64,12 @@ function createGuardSandbox(guardScript: string) {
     rect: { width: number; height: number };
     hasInteractiveChild: boolean;
     contentWindow?: Record<string, unknown>;
+    parentElement: FakeElement | null = null;
+    children: FakeElement[] = [];
     removed = false;
-    style: Record<string, string> = {};
+    onerror: ((evt: any) => void) | null = null;
+    dispatchedEvents: string[] = [];
+    style: Record<string, any> & { setProperty: (k: string, v: string) => void };
 
     constructor(init: MockElementInit) {
       super();
@@ -81,6 +86,12 @@ function createGuardSandbox(guardScript: string) {
       this.rect = init.rect || { width: 100, height: 100 };
       this.hasInteractiveChild = Boolean(init.hasInteractiveChild);
       this.contentWindow = init.contentWindow;
+      const styleObj: any = {
+        setProperty(k: string, v: string) {
+          styleObj[k] = v;
+        },
+      };
+      this.style = styleObj;
     }
 
     getAttribute(name: string) {
@@ -98,12 +109,24 @@ function createGuardSandbox(guardScript: string) {
       return this.hasInteractiveChild ? {} : null;
     }
 
+    querySelectorAll() {
+      return this.children;
+    }
+
     getBoundingClientRect() {
       return this.rect;
     }
 
     remove() {
       this.removed = true;
+    }
+
+    dispatchEvent(evt: any) {
+      this.dispatchedEvents.push(evt.type);
+      if (evt.type === 'error' && typeof this.onerror === 'function') {
+        this.onerror(evt);
+      }
+      return true;
     }
   }
 
@@ -192,13 +215,17 @@ function createGuardSandbox(guardScript: string) {
 
   const head = new FakeHTMLElement({ tagName: 'HEAD' });
   const docEl = new FakeHTMLElement({ tagName: 'HTML' });
+  const body = new FakeHTMLElement({ tagName: 'BODY' });
+  let queryMap: Record<string, FakeElement[]> = {};
+  let mutationCallback: (() => void) | null = null;
   const documentMock = {
     readyState: 'complete',
     head,
+    body,
     documentElement: docEl,
     getElementById: () => null,
     createElement: (tag: string) => new FakeHTMLElement({ tagName: tag }),
-    querySelectorAll: () => [],
+    querySelectorAll: (selector: string) => queryMap[selector] || [],
     addEventListener: (type: string, cb: (evt: any) => void) => {
       const list = listeners.get(type) || [];
       list.push(cb);
@@ -240,6 +267,9 @@ function createGuardSandbox(guardScript: string) {
     URL,
     Event,
     MutationObserver: class {
+      constructor(cb: () => void) {
+        mutationCallback = cb;
+      }
       observe() {}
     },
     setTimeout,
@@ -262,6 +292,12 @@ function createGuardSandbox(guardScript: string) {
     FakeHTMLFormElement,
     FakeXMLHttpRequest,
     docEl,
+    setQueryMap(map: Record<string, FakeElement[]>) {
+      queryMap = map;
+    },
+    triggerSweep() {
+      if (mutationCallback) mutationCallback();
+    },
   };
 }
 
@@ -439,3 +475,117 @@ test('guard script blocks ad scripts/iframes, hardens same-origin iframes, and r
   assert.equal(videoPrevented, false);
   assert.equal(videoEl.removed, false);
 });
+
+test('blocked ad <script> fires async error event so video player never hangs on spinner', async () => {
+  const { guardScript } = extractAdblockArtifacts();
+  const env = createGuardSandbox(guardScript);
+
+  const imaScript = new env.FakeHTMLElement({
+    tagName: 'SCRIPT',
+    attrs: { src: 'https://imasdk.googleapis.com/js/sdkloader/ima3.js' },
+  });
+  let onerrorCalled = 0;
+  imaScript.onerror = () => {
+    onerrorCalled += 1;
+  };
+
+  env.docEl.appendChild(imaScript);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.equal(onerrorCalled, 1, 'Blocked ad script must invoke onerror so player skips ad init');
+  assert.deepEqual(imaScript.dispatchedEvents, ['error']);
+});
+
+test('guard script hides floating Telegram widget (УБЕЖИЩЕ) while preserving 1-4 server switcher', () => {
+  const { guardScript } = extractAdblockArtifacts();
+  const env = createGuardSandbox(guardScript);
+
+  // Simulate floating Telegram widget in bottom-left corner
+  const tgWrapper = new env.FakeHTMLElement({
+    tagName: 'DIV',
+    textContent: 'УБЕЖИЩЕ X',
+    style: { position: 'fixed', zIndex: '9999' },
+    rect: { width: 120, height: 110 },
+  });
+  const tgLink = new env.FakeHTMLElement({
+    tagName: 'A',
+    attrs: { href: 'https://t.me/ubezhische_channel' },
+    textContent: 'УБЕЖИЩЕ',
+    rect: { width: 80, height: 80 },
+  });
+  tgLink.parentElement = tgWrapper;
+  tgWrapper.children = [tgLink];
+
+  // Simulate right-edge server switcher 1: / 2: / 3: / 4:
+  const switcherContainer = new env.FakeHTMLElement({
+    tagName: 'DIV',
+    style: { position: 'fixed', zIndex: '500' },
+    rect: { width: 48, height: 140 },
+  });
+  const tab1 = new env.FakeHTMLElement({ tagName: 'DIV', textContent: '1 :' });
+  const tab2 = new env.FakeHTMLElement({ tagName: 'DIV', textContent: '2 :' });
+  const tab3 = new env.FakeHTMLElement({ tagName: 'DIV', textContent: '3 :' });
+  const tab4 = new env.FakeHTMLElement({ tagName: 'DIV', textContent: '4 :' });
+  switcherContainer.children = [tab1, tab2, tab3, tab4];
+
+  // Even if a link accidentally lived near the switcher, the switcher container must never be hidden
+  const tgInsideSwitcher = new env.FakeHTMLElement({
+    tagName: 'A',
+    attrs: { href: 'https://t.me/promo' },
+  });
+  tgInsideSwitcher.parentElement = switcherContainer;
+
+  const selector =
+    'a[href*="t.me/"], a[href*="telegram.me/"], a[href*="telegram.dog/"], a[href^="tg://"]';
+  env.setQueryMap({
+    [selector]: [tgLink, tgInsideSwitcher],
+  });
+  env.triggerSweep();
+
+  assert.equal(tgWrapper.style.display, 'none', 'Floating Telegram widget wrapper must be hidden');
+  assert.notEqual(
+    switcherContainer.style.display,
+    'none',
+    'Server switcher 1-4 container must NEVER be hidden',
+  );
+  assert.equal(
+    tgInsideSwitcher.style.display,
+    'none',
+    'Only the Telegram link itself should be hidden if inside a protected container',
+  );
+});
+
+test('Chromium launcher uses zero unsupported command-line flags and Firefox enables SmartBlock shims', () => {
+  const libRs = fs.readFileSync(LIB_RS_PATH, 'utf8');
+  const adblockRs = fs.readFileSync(ADBLOCK_RS_PATH, 'utf8');
+
+  assert.ok(
+    !libRs.includes('--host-resolver-rules'),
+    'lib.rs must NOT pass --host-resolver-rules (causes Chrome warning banner & stuck Ad spinner)',
+  );
+  assert.ok(
+    !libRs.includes('--load-extension'),
+    'lib.rs must NOT pass --load-extension (ignored in Chrome 137+ / triggers warnings)',
+  );
+  assert.ok(
+    !libRs.includes('--remote-debugging-port'),
+    'lib.rs must NOT pass --remote-debugging-port (triggers Chromium bad flags prompt)',
+  );
+  assert.ok(
+    libRs.includes('extensions.webcompat.enable_shims'),
+    'Firefox player profile should enable SmartBlock webcompat shims',
+  );
+  assert.ok(
+    adblockRs.includes('detect_chromium_profile_with_adblocker'),
+    'adblock.rs should include read-only Chromium AdBlock profile detection',
+  );
+  assert.ok(
+    adblockRs.includes('remove_dir_all(profile_dir.join("cinescope-adblock-ext"))'),
+    'prepare_chromium_clean_preferences should clean up legacy cinescope-adblock-ext directory',
+  );
+  assert.ok(
+    adblockRs.includes('a[href*="t.me/"]'),
+    'FIREFOX_USER_CONTENT_CSS and COSMETIC_CSS should hide Telegram floating widgets',
+  );
+});
+

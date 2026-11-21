@@ -185,7 +185,19 @@ iframe[src*="teasernet.com"],
 a[class*="branding"],
 [id*="branding-overlay"],
 [data-ad-slot],
-[data-ad-client] {
+[data-ad-client],
+a[href*="t.me/"],
+a[href*="telegram.me/"],
+a[href*="telegram.dog/"],
+a[href^="tg://"],
+[class*="tg-widget"],
+[id*="tg-widget"],
+[class*="telegram-widget"],
+[id*="telegram-widget"],
+[class*="tg_button"],
+[id*="tg_button"],
+[class*="tg-banner"],
+[id*="tg-banner"] {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
@@ -247,22 +259,8 @@ pub fn is_blocked_navigation_url(url: &Url) -> bool {
         || lower.contains("clickunder.js")
 }
 
-/// Формирует `--host-resolver-rules` для Chrome/Edge, блокируя DNS-резолв рекламных
-/// и попандер-доменов на уровне сетевого стека Chromium (работает во всех версиях Chrome/Edge
-/// и не мешает системному прокси/VPN).
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn build_chromium_host_resolver_rules() -> String {
-    let mut rules = Vec::with_capacity(AD_BLOCK_DOMAINS.len() * 2);
-    for domain in AD_BLOCK_DOMAINS {
-        rules.push(format!("MAP {} ~NOTFOUND", domain));
-        rules.push(format!("MAP *.{} ~NOTFOUND", domain));
-    }
-    rules.join(",")
-}
-
-/// Генерирует универсальный скрипт защиты от всплывающих окон, кликандеров,
-/// VAST/pre-roll видеорекламы и баннеров. Работает и во встроенном WebView2/WKWebView,
-/// и внутри встроенного MV3-расширения для Chrome/Edge.
+/// Генерирует скрипт защиты от всплывающих окон, кликандеров, VAST/pre-roll видеорекламы,
+/// баннеров и сторонних плавающих Telegram-виджетов для встроенного окна WebView2/WKWebView.
 pub fn build_player_guard_script() -> String {
     let domains_json =
         serde_json::to_string(AD_BLOCK_DOMAINS).unwrap_or_else(|_| "[]".to_string());
@@ -525,6 +523,22 @@ pub fn build_player_guard_script() -> String {
     return false;
   }
 
+  function notifyBlockedScriptError(node) {
+    if (!(node instanceof Element) || node.tagName !== 'SCRIPT') return;
+    setTimeout(() => {
+      try {
+        if (typeof node.dispatchEvent === 'function') {
+          const errEvt = typeof Event === 'function' ? new Event('error') : { type: 'error' };
+          node.dispatchEvent(errEvt);
+        } else if (typeof node.onerror === 'function') {
+          node.onerror({ type: 'error' });
+        }
+      } catch {
+        // Игнорируем
+      }
+    }, 0);
+  }
+
   function hardenSameOriginIframe(node) {
     if (!(node instanceof Element) || node.tagName !== 'IFRAME') return;
     try {
@@ -545,6 +559,7 @@ pub fn build_player_guard_script() -> String {
     const origAppendChild = Node.prototype.appendChild;
     Node.prototype.appendChild = function (child) {
       if (shouldNeutralizeNode(child)) {
+        notifyBlockedScriptError(child);
         return child;
       }
       const result = origAppendChild.call(this, child);
@@ -554,6 +569,7 @@ pub fn build_player_guard_script() -> String {
     const origInsertBefore = Node.prototype.insertBefore;
     Node.prototype.insertBefore = function (child, ref) {
       if (shouldNeutralizeNode(child)) {
+        notifyBlockedScriptError(child);
         return child;
       }
       const result = origInsertBefore.call(this, child, ref);
@@ -662,7 +678,19 @@ pub fn build_player_guard_script() -> String {
     iframe[src*="betweendigital.com"],
     iframe[src*="adriver.ru"],
     iframe[src*="kadam.net"],
-    iframe[src*="teasernet.com"] {
+    iframe[src*="teasernet.com"],
+    a[href*="t.me/"],
+    a[href*="telegram.me/"],
+    a[href*="telegram.dog/"],
+    a[href^="tg://"],
+    [class*="tg-widget"],
+    [id*="tg-widget"],
+    [class*="telegram-widget"],
+    [id*="telegram-widget"],
+    [class*="tg_button"],
+    [id*="tg_button"],
+    [class*="tg-banner"],
+    [id*="tg-banner"] {
       display: none !important;
       visibility: hidden !important;
       pointer-events: none !important;
@@ -671,6 +699,76 @@ pub fn build_player_guard_script() -> String {
       opacity: 0 !important;
     }
   `;
+
+  const TELEGRAM_HREF_RE = /(^tg:\/\/|\/\/(www\.)?(t\.me|telegram\.me|telegram\.dog)\/)/i;
+  const SERVER_SWITCHER_RE = /^\s*[1-9]\s*:/;
+
+  function isServerSwitcherElement(el) {
+    if (!(el instanceof Element)) return false;
+    const text = (el.textContent || '').trim();
+    if (SERVER_SWITCHER_RE.test(text) && text.length <= 24) return true;
+    if (typeof el.querySelectorAll !== 'function') return false;
+    const items = el.querySelectorAll('a, button, li, div, span');
+    let numberedCount = 0;
+    for (let i = 0; i < items.length; i++) {
+      const t = (items[i].textContent || '').trim();
+      if (SERVER_SWITCHER_RE.test(t) && t.length <= 24) {
+        numberedCount += 1;
+        if (numberedCount >= 2) return true;
+      }
+    }
+    return false;
+  }
+
+  function isSmallFloatingWidget(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el === document.body || el === document.documentElement) return false;
+    if (typeof el.querySelector === 'function' && el.querySelector('video, audio, iframe')) {
+      return false;
+    }
+    if (isServerSwitcherElement(el)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.position !== 'fixed' && style.position !== 'absolute') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.width <= 320 && rect.height > 0 && rect.height <= 260;
+  }
+
+  function hideElementSafely(el) {
+    if (!(el instanceof HTMLElement)) return;
+    if (el.style && typeof el.style.setProperty === 'function') {
+      el.style.setProperty('display', 'none', 'important');
+      el.style.setProperty('visibility', 'hidden', 'important');
+      el.style.setProperty('pointer-events', 'none', 'important');
+      el.style.setProperty('opacity', '0', 'important');
+    } else if (el.style) {
+      el.style.display = 'none';
+      el.style.visibility = 'hidden';
+      el.style.pointerEvents = 'none';
+      el.style.opacity = '0';
+    }
+  }
+
+  function hideFloatingTelegramWidgets() {
+    const tgLinks = document.querySelectorAll(
+      'a[href*="t.me/"], a[href*="telegram.me/"], a[href*="telegram.dog/"], a[href^="tg://"]'
+    );
+    for (let i = 0; i < tgLinks.length; i++) {
+      const link = tgLinks[i];
+      const href = link.getAttribute('href') || '';
+      if (!TELEGRAM_HREF_RE.test(href)) continue;
+      if (isServerSwitcherElement(link)) continue;
+
+      let targetToHide = link;
+      let parent = link.parentElement;
+      for (let depth = 0; depth < 2 && parent; depth++) {
+        if (isSmallFloatingWidget(parent)) {
+          targetToHide = parent;
+        }
+        parent = parent.parentElement;
+      }
+      hideElementSafely(targetToHide);
+    }
+  }
 
   function injectCosmeticCss() {
     if (document.getElementById('__cinescope_adblock_css')) return;
@@ -704,6 +802,8 @@ pub fn build_player_guard_script() -> String {
         link.remove();
       }
     }
+
+    hideFloatingTelegramWidgets();
   }
 
   function scheduleSweep() {
@@ -742,12 +842,120 @@ pub fn build_player_guard_script() -> String {
     template.replace("__DOMAINS_JSON__", &domains_json)
 }
 
-/// Подготавливает защиту от рекламы и всплывающих окон в изолированном профиле Chrome/Edge:
-/// 1. Записывает настройки `Default/Preferences` (запрет всплывающих окон, уведомлений, навязчивой рекламы, автозагрузок).
-/// 2. Создаёт встроенное MV3-расширение `cinescope-adblock-ext` (DNR-правила + MAIN-world скрипт-щит).
+/// Известные официальные ID расширений-блокировщиков рекламы в Chrome Web Store и Edge Add-ons.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn prepare_chromium_adblock_profile(profile_dir: &Path) -> Result<PathBuf, String> {
-    // 1. Default/Preferences: строгая блокировка всплывающих окон и уведомлений
+const KNOWN_CHROMIUM_ADBLOCK_EXT_IDS: &[&str] = &[
+    // uBlock Origin (Chrome / Edge)
+    "cjpalhdlnbpafiamejdnhcphjbkeiagm",
+    "odfafepnkmbhccpbejgmiehpchacaeak",
+    // uBlock Origin Lite (Chrome / Edge)
+    "ddkjiahejlhfcafbddmgiahcphecmpfh",
+    "cimighlppcgcoapaliogpjjdehbnofhn",
+    // AdGuard AdBlocker & MV3 (Chrome / Edge)
+    "bgnkhhnnamicmpeenaelnjfhikgbkllg",
+    "pdffkfellgipmhklpdmokmckkkfcopbh",
+    "apjcbfpjihpedihablmalmbbhjpklbdf",
+    // AdBlock Plus (Chrome / Edge)
+    "cfhdojbkjhnklbpkdaibdccddilifddb",
+    "gmgoamodcdcjnbaobigkjelfplakmdhh",
+    // AdBlock (Chrome / Edge)
+    "gighmmpiobklfepjocnamgkkbiglidom",
+    "ndcileolkflehcjpmjnfbnaibdcgglog",
+    // Ghostery
+    "mlomiejdfkolichcflejclcbmpeaniij",
+];
+
+#[cfg(target_os = "macos")]
+fn default_chromium_user_data_dir(browser_kind: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let base = PathBuf::from(home).join("Library/Application Support");
+    match browser_kind {
+        "chrome" => Some(base.join("Google/Chrome")),
+        "edge" => Some(base.join("Microsoft Edge")),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn default_chromium_user_data_dir(browser_kind: &str) -> Option<PathBuf> {
+    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+    let base = PathBuf::from(local_app_data);
+    match browser_kind {
+        "chrome" => Some(base.join(r"Google\Chrome\User Data")),
+        "edge" => Some(base.join(r"Microsoft\Edge\User Data")),
+        _ => None,
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn profile_has_installed_adblocker(user_data_dir: &Path, profile_name: &str) -> bool {
+    let extensions_dir = user_data_dir.join(profile_name).join("Extensions");
+    if !extensions_dir.is_dir() {
+        return false;
+    }
+
+    KNOWN_CHROMIUM_ADBLOCK_EXT_IDS.iter().any(|ext_id| {
+        let ext_path = extensions_dir.join(ext_id);
+        if !ext_path.is_dir() {
+            return false;
+        }
+        fs::read_dir(&ext_path)
+            .ok()
+            .map(|mut entries| entries.any(|entry| entry.ok().map(|e| e.path().is_dir()).unwrap_or(false)))
+            .unwrap_or(false)
+    })
+}
+
+/// Проверяет (только чтение), установлен ли в стандартном профиле Chrome/Edge пользователя
+/// популярный блокировщик рекламы (uBlock Origin, AdGuard, AdBlock и т.д.).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn detect_chromium_profile_with_adblocker(browser_kind: &str) -> Option<String> {
+    let user_data_dir = default_chromium_user_data_dir(browser_kind)?;
+    if !user_data_dir.is_dir() {
+        return None;
+    }
+
+    let mut candidate_profiles: Vec<String> = Vec::new();
+
+    // Сначала проверяем последний активный профиль из Local State
+    if let Ok(raw_local_state) = fs::read_to_string(user_data_dir.join("Local State")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw_local_state) {
+            if let Some(last_used) = parsed
+                .get("profile")
+                .and_then(|p| p.get("last_used"))
+                .and_then(|v| v.as_str())
+            {
+                let trimmed = last_used.trim();
+                if !trimmed.is_empty() {
+                    candidate_profiles.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    for fallback in [
+        "Default",
+        "Profile 1",
+        "Profile 2",
+        "Profile 3",
+        "Profile 4",
+        "Profile 5",
+    ] {
+        if !candidate_profiles.iter().any(|p| p == fallback) {
+            candidate_profiles.push(fallback.to_string());
+        }
+    }
+
+    candidate_profiles
+        .into_iter()
+        .find(|profile_name| profile_has_installed_adblocker(&user_data_dir, profile_name))
+}
+
+/// Подготавливает чистые настройки изолированного профиля Chrome/Edge без предупреждающих флагов:
+/// 1. Записывает `Default/Preferences` (запрет всплывающих окон, уведомлений, навязчивой рекламы, автозагрузок).
+/// 2. Удаляет устаревший каталог `cinescope-adblock-ext`, если он остался от предыдущих версий.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn prepare_chromium_clean_preferences(profile_dir: &Path) -> Result<(), String> {
     let default_dir = profile_dir.join("Default");
     fs::create_dir_all(&default_dir)
         .map_err(|err| format!("Не удалось подготовить каталог Preferences: {}", err))?;
@@ -788,98 +996,10 @@ pub fn prepare_chromium_adblock_profile(profile_dir: &Path) -> Result<PathBuf, S
         let _ = fs::write(&prefs_path, serialized);
     }
 
-    // 2. Встроенное Manifest V3 расширение блокировки рекламы и всплывающих окон
-    let ext_dir = profile_dir.join("cinescope-adblock-ext");
-    fs::create_dir_all(&ext_dir)
-        .map_err(|err| format!("Не удалось создать каталог adblock-расширения: {}", err))?;
+    // Очищаем устаревший каталог локального MV3-расширения от предыдущей версии
+    let _ = fs::remove_dir_all(profile_dir.join("cinescope-adblock-ext"));
 
-    let manifest = serde_json::json!({
-        "manifest_version": 3,
-        "name": "CineScope Ad & Popup Shield",
-        "version": "1.0.0",
-        "permissions": ["declarativeNetRequest"],
-        "host_permissions": ["http://*/*", "https://*/*"],
-        "declarative_net_request": {
-            "rule_resources": [
-                {
-                    "id": "cinescope_adblock_rules",
-                    "enabled": true,
-                    "path": "rules.json"
-                }
-            ]
-        },
-        "content_scripts": [
-            {
-                "matches": ["http://*/*", "https://*/*"],
-                "js": ["guard.js"],
-                "run_at": "document_start",
-                "all_frames": true,
-                "world": "MAIN"
-            }
-        ]
-    });
-
-    let mut rules: Vec<serde_json::Value> = Vec::with_capacity(AD_BLOCK_DOMAINS.len() + 8);
-    let mut rule_id: u32 = 1;
-    let resource_types = serde_json::json!([
-        "script",
-        "xmlhttprequest",
-        "sub_frame",
-        "image",
-        "ping",
-        "other"
-    ]);
-
-    for domain in AD_BLOCK_DOMAINS {
-        rules.push(serde_json::json!({
-            "id": rule_id,
-            "priority": 1,
-            "action": { "type": "block" },
-            "condition": {
-                "urlFilter": format!("||{}^", domain),
-                "resourceTypes": resource_types
-            }
-        }));
-        rule_id += 1;
-    }
-
-    let url_patterns = [
-        "/vast.xml",
-        "/vast?",
-        "/vpaid",
-        "/preroll",
-        "/midroll",
-        "/postroll",
-        "/popunder",
-        "/clickunder",
-    ];
-    for pattern in url_patterns {
-        rules.push(serde_json::json!({
-            "id": rule_id,
-            "priority": 1,
-            "action": { "type": "block" },
-            "condition": {
-                "urlFilter": pattern,
-                "resourceTypes": ["script", "xmlhttprequest", "sub_frame", "other"]
-            }
-        }));
-        rule_id += 1;
-    }
-
-    let manifest_str = serde_json::to_string_pretty(&manifest)
-        .map_err(|err| format!("Не удалось сериализовать manifest.json: {}", err))?;
-    let rules_str = serde_json::to_string(&rules)
-        .map_err(|err| format!("Не удалось сериализовать rules.json: {}", err))?;
-    let guard_js = build_player_guard_script();
-
-    fs::write(ext_dir.join("manifest.json"), manifest_str)
-        .map_err(|err| format!("Не удалось записать manifest.json: {}", err))?;
-    fs::write(ext_dir.join("rules.json"), rules_str)
-        .map_err(|err| format!("Не удалось записать rules.json: {}", err))?;
-    fs::write(ext_dir.join("guard.js"), guard_js)
-        .map_err(|err| format!("Не удалось записать guard.js: {}", err))?;
-
-    Ok(ext_dir)
+    Ok(())
 }
 
 #[cfg(test)]

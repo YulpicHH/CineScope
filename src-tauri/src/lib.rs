@@ -88,6 +88,7 @@ user_pref("privacy.trackingprotection.socialtracking.enabled", true);
 user_pref("privacy.trackingprotection.cryptomining.enabled", true);
 user_pref("privacy.trackingprotection.fingerprinting.enabled", true);
 user_pref("privacy.annotate_channels.strict_list.enabled", true);
+user_pref("extensions.webcompat.enable_shims", true);
 user_pref("network.http.referer.XOriginTrimmingPolicy", 2);
 user_pref("full-screen-api.warning.timeout", 0);
 user_pref("full-screen-api.warning.delay", 0);
@@ -628,6 +629,7 @@ async fn fetch_kinopoisk_candidates(
 fn launch_chromium_app_window(
     app: &tauri::AppHandle,
     executable: &Path,
+    browser_kind: &str,
     profile_folder_name: &str,
     browser_label: &str,
     extra_disabled_features: &str,
@@ -640,16 +642,44 @@ fn launch_chromium_app_window(
 
     terminate_browser_player(player_state);
 
-    let profile_dir = prepare_chromium_player_profile(app, profile_folder_name, browser_label)?;
-    let ext_dir = adblock::prepare_chromium_adblock_profile(&profile_dir)?;
-    let user_data_arg = format!("--user-data-dir={}", profile_dir.to_string_lossy());
     let app_arg = format!("--app={}", parsed_url.as_str());
     let disabled_features_arg = format!("--disable-features={}", extra_disabled_features);
-    let host_rules_arg = format!(
-        "--host-resolver-rules={}",
-        adblock::build_chromium_host_resolver_rules()
-    );
-    let load_ext_arg = format!("--load-extension={}", ext_dir.to_string_lossy());
+
+    // Если в основном профиле Chrome/Edge пользователя уже установлен блокировщик рекламы
+    // (uBlock Origin, AdGuard, AdBlock и др.), запускаем чистое --app окно с этим профилем:
+    // без предупреждений командной строки, с активными расширениями пользователя и без
+    // принудительного завершения основного браузера при выходе из CineScope.
+    if let Some(user_profile_name) = adblock::detect_chromium_profile_with_adblocker(browser_kind) {
+        let profile_arg = format!("--profile-directory={}", user_profile_name);
+        let mut command = Command::new(executable);
+        command
+            .arg(profile_arg)
+            .arg(app_arg)
+            .arg("--window-size=1366,820")
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg("--disable-notifications")
+            .arg(disabled_features_arg)
+            .arg("--force-dark-mode");
+        configure_browser_command(&mut command);
+
+        let mut child = command.spawn().map_err(|err| {
+            format!("Не удалось запустить чистое окно {}: {}", browser_label, err)
+        })?;
+
+        // Аккуратно дожидаемся завершения дочернего процесса в фоне (без kill основного браузера)
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+
+        return Ok(());
+    }
+
+    // Иначе запускаем чистый изолированный профиль с системным запретом попапов/уведомлений
+    // и без каких-либо неподдерживаемых флагов командной строки.
+    let profile_dir = prepare_chromium_player_profile(app, profile_folder_name, browser_label)?;
+    adblock::prepare_chromium_clean_preferences(&profile_dir)?;
+    let user_data_arg = format!("--user-data-dir={}", profile_dir.to_string_lossy());
 
     let mut command = Command::new(executable);
     command
@@ -660,8 +690,6 @@ fn launch_chromium_app_window(
         .arg("--no-default-browser-check")
         .arg("--disable-notifications")
         .arg(disabled_features_arg)
-        .arg(host_rules_arg)
-        .arg(load_ext_arg)
         .arg("--force-dark-mode");
     configure_browser_command(&mut command);
 
@@ -739,6 +767,7 @@ async fn open_watch_window(
             return launch_chromium_app_window(
                 &app,
                 &chrome_path,
+                "chrome",
                 "chrome-player-profile",
                 "Chrome",
                 "Translate,MediaRouter",
@@ -754,6 +783,7 @@ async fn open_watch_window(
             return launch_chromium_app_window(
                 &app,
                 &edge_path,
+                "edge",
                 "edge-player-profile",
                 "Microsoft Edge",
                 "Translate,MediaRouter,msEdgeSidebarV2",

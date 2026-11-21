@@ -1,3 +1,5 @@
+#[cfg(desktop)]
+mod adblock;
 mod tv_pairing;
 
 use serde::{Deserialize, Serialize};
@@ -46,60 +48,9 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const UA_DESKTOP_SAFARI_MACOS: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
 
-#[cfg(desktop)]
-const PLAYER_POPUP_BLOCK_SCRIPT: &str = r#"
-(() => {
-  if (window.__cinescopePopupGuardInstalled) return;
-  window.__cinescopePopupGuardInstalled = true;
-
-  try {
-    Object.defineProperty(window, 'open', {
-      configurable: true,
-      writable: true,
-      value: function () {
-        return null;
-      },
-    });
-  } catch {
-    try {
-      window.open = function () {
-        return null;
-      };
-    } catch {
-      // Игнорируем, если страница запретила переопределение window.open
-    }
-  }
-
-  document.addEventListener(
-    'click',
-    (event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const anchor = target.closest('a[href]');
-      if (!anchor) return;
-      const linkTarget = (anchor.getAttribute('target') || '').toLowerCase();
-      if (linkTarget !== '_blank') return;
-
-      const href = anchor.getAttribute('href') || '';
-      try {
-        const parsed = new URL(href, window.location.href);
-        if (parsed.origin !== window.location.origin) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-        }
-      } catch {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-    },
-    true,
-  );
-})();
-"#;
-
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const FIREFOX_USER_JS: &str = r#"
-// CineScope isolated cinema player profile
+// CineScope isolated cinema player profile with strict ad & popup shield
 user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
 user_pref("browser.tabs.inTitlebar", 0);
 user_pref("ui.systemUsesDarkTheme", 1);
@@ -121,8 +72,23 @@ user_pref("browser.sessionstore.max_windows_undo", 0);
 user_pref("dom.disable_open_during_load", true);
 user_pref("dom.popup_maximum", 0);
 user_pref("dom.popup_allowed_events", "");
-user_pref("browser.link.open_newwindow", 1);
-user_pref("browser.link.open_newwindow.restriction", 0);
+user_pref("dom.block_multiple_popups", true);
+user_pref("privacy.popups.policy", 2);
+user_pref("privacy.popups.showBrowserMessage", false);
+user_pref("browser.popups.showPopupBlocker", false);
+user_pref("dom.webnotifications.enabled", false);
+user_pref("dom.push.enabled", false);
+user_pref("media.block-autoplay-until-in-foreground", true);
+user_pref("browser.link.open_newwindow", 3);
+user_pref("browser.link.open_newwindow.restriction", 2);
+user_pref("browser.contentblocking.category", "strict");
+user_pref("privacy.trackingprotection.enabled", true);
+user_pref("privacy.trackingprotection.pbmode.enabled", true);
+user_pref("privacy.trackingprotection.socialtracking.enabled", true);
+user_pref("privacy.trackingprotection.cryptomining.enabled", true);
+user_pref("privacy.trackingprotection.fingerprinting.enabled", true);
+user_pref("privacy.annotate_channels.strict_list.enabled", true);
+user_pref("network.http.referer.XOriginTrimmingPolicy", 2);
 user_pref("full-screen-api.warning.timeout", 0);
 user_pref("full-screen-api.warning.delay", 0);
 user_pref("media.hardware-video-decoding.enabled", true);
@@ -415,6 +381,11 @@ fn prepare_firefox_player_profile(app: &tauri::AppHandle) -> Result<PathBuf, Str
         .map_err(|err| format!("Не удалось записать настройки профиля Firefox: {}", err))?;
     fs::write(chrome_dir.join("userChrome.css"), FIREFOX_USER_CHROME_CSS)
         .map_err(|err| format!("Не удалось записать стили окна Firefox: {}", err))?;
+    fs::write(
+        chrome_dir.join("userContent.css"),
+        adblock::FIREFOX_USER_CONTENT_CSS,
+    )
+    .map_err(|err| format!("Не удалось записать правила скрытия рекламы Firefox: {}", err))?;
 
     cleanup_firefox_session_artifacts(&profile_dir);
 
@@ -670,9 +641,15 @@ fn launch_chromium_app_window(
     terminate_browser_player(player_state);
 
     let profile_dir = prepare_chromium_player_profile(app, profile_folder_name, browser_label)?;
+    let ext_dir = adblock::prepare_chromium_adblock_profile(&profile_dir)?;
     let user_data_arg = format!("--user-data-dir={}", profile_dir.to_string_lossy());
     let app_arg = format!("--app={}", parsed_url.as_str());
     let disabled_features_arg = format!("--disable-features={}", extra_disabled_features);
+    let host_rules_arg = format!(
+        "--host-resolver-rules={}",
+        adblock::build_chromium_host_resolver_rules()
+    );
+    let load_ext_arg = format!("--load-extension={}", ext_dir.to_string_lossy());
 
     let mut command = Command::new(executable);
     command
@@ -681,7 +658,10 @@ fn launch_chromium_app_window(
         .arg("--window-size=1366,820")
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
+        .arg("--disable-notifications")
         .arg(disabled_features_arg)
+        .arg(host_rules_arg)
+        .arg(load_ext_arg)
         .arg("--force-dark-mode");
     configure_browser_command(&mut command);
 
@@ -822,7 +802,7 @@ async fn open_watch_window(
         PLAYER_WINDOW_LABEL,
         WebviewUrl::External(parsed_url),
     )
-    .initialization_script_for_all_frames(PLAYER_POPUP_BLOCK_SCRIPT);
+    .initialization_script_for_all_frames(adblock::build_player_guard_script());
 
     // На macOS используем десктопный Safari UA; на Windows оставляем нативный Chromium/Edge WebView2 UA для 4K VP9/AV1
     #[cfg(target_os = "macos")]
@@ -837,6 +817,7 @@ async fn open_watch_window(
         .center()
         .resizable(true)
         .theme(Some(Theme::Dark))
+        .on_navigation(|url| !adblock::is_blocked_navigation_url(url))
         .on_new_window(|_url, _features| NewWindowResponse::Deny);
 
     builder

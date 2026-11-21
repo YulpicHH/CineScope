@@ -8,7 +8,6 @@ import {
   Film,
   KeyRound,
   Loader2,
-  MonitorPlay,
   Play,
   Share,
   ShieldCheck,
@@ -19,28 +18,12 @@ import {
 import { useAppMode } from '../../hooks/useAppMode';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { validateTmdbApiKey } from '../../services/apiKeys';
-import {
-  checkPlayerBrowsers,
-  getPlayerMode,
-  hasStoredPlayerMode,
-  setPlayerMode,
-  type AvailablePlayerBrowsers,
-} from '../../services/playerSettings';
 import { hasInternalWhitespace } from '../../utils/apiKeysRules';
 import {
-  detectClientPlatform,
-  isDesktopTauriRuntime,
   isTauriRuntime,
   isTvMode,
   openExternalUrl,
-  type DesktopPlatform,
 } from '../../utils/platform';
-import {
-  getDefaultPlayerMode,
-  getPlayerModeOption,
-  getPlayerModeOptions,
-  type PlayerModeId,
-} from '../../utils/playerProfile';
 import {
   mergeReceivedPairingKeys,
   normalizePairingPayload,
@@ -72,14 +55,6 @@ export function ApiSettingsModal() {
 
   const [tmdbInput, setTmdbInput] = useState(userTmdbApiKey);
   const [kinopoiskInput, setKinopoiskInput] = useState(userKinopoiskApiKey);
-  const [desktopPlatform, setDesktopPlatform] = useState<DesktopPlatform>(() =>
-    detectClientPlatform(),
-  );
-  const [playerMode, setPlayerModeState] = useState<PlayerModeId>(() =>
-    getPlayerMode(),
-  );
-  const [availableBrowsers, setAvailableBrowsers] =
-    useState<AvailablePlayerBrowsers | null>(null);
   const [showTmdbKey, setShowTmdbKey] = useState(false);
   const [showKpKey, setShowKpKey] = useState(false);
   const [validating, setValidating] = useState(false);
@@ -87,7 +62,6 @@ export function ApiSettingsModal() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const prevOpenRef = useRef(false);
-  const isDesktopTauri = isDesktopTauriRuntime();
   const isAnyTauri = isTauriRuntime();
   const tvMode = isTvMode();
   const { isIOSSafari, canPromptInstall, triggerInstall } = usePWAInstall();
@@ -96,34 +70,15 @@ export function ApiSettingsModal() {
     const wasOpen = prevOpenRef.current;
     prevOpenRef.current = isOpen;
     if (isOpen && !wasOpen) {
-      const detected = availableBrowsers?.platform ?? detectClientPlatform();
-      setDesktopPlatform(detected);
       setTmdbInput(userTmdbApiKey);
       setKinopoiskInput(userKinopoiskApiKey);
-      setPlayerModeState(getPlayerMode(detected));
       setShowTmdbKey(false);
       setShowKpKey(false);
       setCanSaveOffline(false);
       setErrorMessage(null);
       setInfoMessage(null);
     }
-  }, [isOpen, userTmdbApiKey, userKinopoiskApiKey, availableBrowsers]);
-
-  useEffect(() => {
-    if (!isOpen || !isDesktopTauri || isFirstRun) return;
-    let active = true;
-    void checkPlayerBrowsers().then((browsers) => {
-      if (!active) return;
-      setAvailableBrowsers(browsers);
-      setDesktopPlatform(browsers.platform);
-      if (!hasStoredPlayerMode()) {
-        setPlayerModeState(getDefaultPlayerMode(browsers.platform));
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [isOpen, isDesktopTauri, isFirstRun]);
+  }, [isOpen, userTmdbApiKey, userKinopoiskApiKey]);
 
   useEffect(() => {
     if (!isOpen || isFirstRun) return;
@@ -313,21 +268,6 @@ export function ApiSettingsModal() {
     setInfoMessage('Сохранённые пользовательские ключи удалены с этого устройства.');
   };
 
-  const handleSelectPlayerMode = (nextMode: PlayerModeId) => {
-    if (validating) return;
-    const saved = setPlayerMode(nextMode, desktopPlatform);
-    setPlayerModeState(saved);
-    setErrorMessage(null);
-    const option = getPlayerModeOption(saved, desktopPlatform);
-    setInfoMessage(
-      `Режим плеера «${option.label} (${option.badge})» сохранён — применится при следующем нажатии «Смотреть».`,
-    );
-  };
-
-  const playerModeOptions = getPlayerModeOptions(desktopPlatform);
-  const activePlayerOption = getPlayerModeOption(playerMode, desktopPlatform);
-  const isWindowsDesktop = desktopPlatform === 'windows';
-
   return (
     <div
       className="safe-modal-inset tv-modal-overscan fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/75 backdrop-blur-sm"
@@ -510,127 +450,6 @@ export function ApiSettingsModal() {
               Используется для автоматического поиска ссылки на просмотр. Можно добавить позже.
             </p>
           </div>
-
-          {/* Режим окна плеера (только в десктопном Tauri-приложении) */}
-          {isDesktopTauri && !isFirstRun ? (
-            <div
-              className="space-y-2.5 border-t border-white/[0.08] pt-4"
-              data-testid="player-mode-section"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <MonitorPlay className="h-4 w-4 text-blue-400" aria-hidden="true" />
-                  <span>Браузер для просмотра</span>
-                </div>
-                {playerMode === 'firefox_window' && availableBrowsers ? (
-                  availableBrowsers.firefox ? (
-                    <span
-                      data-testid="browser-status-badge"
-                      className="text-[11px] font-medium text-emerald-400"
-                    >
-                      Firefox готов
-                    </span>
-                  ) : (
-                    <span
-                      data-testid="browser-status-badge"
-                      className="text-[11px] font-medium text-amber-300"
-                    >
-                      Firefox не найден — откроется встроенное окно
-                    </span>
-                  )
-                ) : playerMode === 'chrome_window' && availableBrowsers ? (
-                  availableBrowsers.chrome ? (
-                    <span
-                      data-testid="browser-status-badge"
-                      className="text-[11px] font-medium text-emerald-400"
-                    >
-                      Chrome готов
-                    </span>
-                  ) : (
-                    <span
-                      data-testid="browser-status-badge"
-                      className="text-[11px] font-medium text-amber-300"
-                    >
-                      Chrome не найден — откроется встроенное окно
-                    </span>
-                  )
-                ) : playerMode === 'edge_window' && availableBrowsers ? (
-                  availableBrowsers.edge ? (
-                    <span
-                      data-testid="browser-status-badge"
-                      className="text-[11px] font-medium text-emerald-400"
-                    >
-                      Edge готов
-                    </span>
-                  ) : (
-                    <span
-                      data-testid="browser-status-badge"
-                      className="text-[11px] font-medium text-amber-300"
-                    >
-                      Edge не найден — откроется встроенное окно
-                    </span>
-                  )
-                ) : playerMode === 'embedded_webkit' ? (
-                  <span
-                    data-testid="browser-status-badge"
-                    className={`text-[11px] font-medium ${
-                      isWindowsDesktop ? 'text-emerald-400' : 'text-slate-400'
-                    }`}
-                  >
-                    {isWindowsDesktop ? 'WebView2 4K готов' : 'Внутри приложения'}
-                  </span>
-                ) : null}
-              </div>
-
-              <div
-                role="radiogroup"
-                aria-label="Выбор браузера для окна просмотра"
-                className={`grid gap-2 ${
-                  playerModeOptions.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
-                }`}
-              >
-                {playerModeOptions.map((option) => {
-                  const selected = playerMode === option.id;
-                  const isHighRes = option.badge === '4K';
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      data-testid={`player-mode-${option.id}`}
-                      disabled={validating}
-                      onClick={() => handleSelectPlayerMode(option.id)}
-                      className={`flex min-h-[48px] flex-col items-start justify-center gap-0.5 rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50 ${
-                        selected
-                          ? 'border-blue-500/70 bg-blue-600/20 text-white'
-                          : 'border-white/10 bg-[#090B10] text-slate-300 hover:border-white/25 hover:text-white'
-                      }`}
-                    >
-                      <span className="whitespace-nowrap text-xs font-semibold leading-tight">
-                        {option.label}
-                      </span>
-                      <span
-                        className={`whitespace-nowrap text-[11px] font-medium leading-tight ${
-                          isHighRes
-                            ? selected
-                              ? 'text-blue-300'
-                              : 'text-blue-400/90'
-                            : 'text-slate-400'
-                        }`}
-                      >
-                        {isHighRes ? 'до 4K' : option.badge}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <p className="text-xs leading-relaxed text-slate-400">
-                {activePlayerOption.description}
-              </p>
-            </div>
-          ) : null}
 
           {errorMessage ? (
             <div

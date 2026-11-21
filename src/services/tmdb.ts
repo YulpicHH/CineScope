@@ -38,6 +38,10 @@ import {
   filterAndPaginatePersonCredits,
   type PersonCreditEntry,
 } from '../utils/personFilmography';
+import type {
+  QuickSearchPerson,
+  QuickSearchResults,
+} from '../utils/quickSearch';
 import { getTmdbApiKeyValue, tmdbNativeGet } from './apiKeys';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
@@ -105,6 +109,7 @@ interface TmdbPersonSearchResponse {
     id: number;
     name: string;
     known_for_department?: string;
+    profile_path?: string | null;
     known_for?: RawTmdbMedia[];
   }>;
 }
@@ -722,6 +727,117 @@ export async function fetchCatalogPage(
     totalPages: single.totalPages,
     totalResults: single.totalResults,
   };
+}
+
+/**
+ * Быстрый поиск без дополнительных фильтров (фильмы, сериалы и актёры) для значка лупы на Главной.
+ */
+export async function quickSearchCatalog(
+  query: string,
+  useDemo: boolean,
+  signal?: AbortSignal,
+): Promise<QuickSearchResults> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return { titles: [], people: [] };
+  }
+
+  if (useDemo || !hasTmdbKey()) {
+    const lower = trimmed.toLowerCase();
+    const matchedTitles: MediaItem[] = [];
+    const matchedPeopleMap = new Map<string, QuickSearchPerson>();
+
+    for (const entry of DEMO_TITLES) {
+      const inTitle =
+        entry.item.title.toLowerCase().includes(lower) ||
+        entry.item.originalTitle.toLowerCase().includes(lower);
+      const matchingCast = entry.cast.filter((c) =>
+        c.name.toLowerCase().includes(lower),
+      );
+      if (inTitle || matchingCast.length > 0) {
+        matchedTitles.push(entry.item);
+      }
+      for (const castMember of matchingCast) {
+        const key = castMember.name.toLowerCase();
+        if (!matchedPeopleMap.has(key)) {
+          matchedPeopleMap.set(key, {
+            id: -(matchedPeopleMap.size + 1),
+            name: castMember.name,
+            department: 'Актёр',
+            profilePath: null,
+            knownForTitle: entry.item.title,
+          });
+        }
+      }
+    }
+
+    return {
+      titles: matchedTitles.slice(0, 10),
+      people: Array.from(matchedPeopleMap.values()).slice(0, 4),
+    };
+  }
+
+  const emptyList: TmdbListResponse = {
+    page: 1,
+    total_pages: 1,
+    total_results: 0,
+    results: [],
+  };
+
+  const [movieRes, tvRes, personRes] = await Promise.all([
+    tmdbFetch<TmdbListResponse>(
+      '/search/movie',
+      { query: trimmed, page: 1, include_adult: 'false' },
+      signal,
+    ).catch(() => emptyList),
+    tmdbFetch<TmdbListResponse>(
+      '/search/tv',
+      { query: trimmed, page: 1, include_adult: 'false' },
+      signal,
+    ).catch(() => emptyList),
+    tmdbFetch<TmdbPersonSearchResponse>(
+      '/search/person',
+      { query: trimmed, page: 1, include_adult: 'false' },
+      signal,
+    ).catch(() => ({ results: [] })),
+  ]);
+
+  const seenKeys = new Set<string>();
+  const titles: MediaItem[] = [];
+
+  for (const raw of movieRes.results.slice(0, 8)) {
+    const key = `movie:${raw.id}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    titles.push(normalizeMediaItem(raw, 'movie'));
+  }
+  for (const raw of tvRes.results.slice(0, 8)) {
+    const key = `tv:${raw.id}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    titles.push(normalizeMediaItem(raw, 'tv'));
+  }
+
+  const people: QuickSearchPerson[] = personRes.results
+    .slice(0, 4)
+    .map((person) => {
+      const firstWork = person.known_for?.[0];
+      const knownForTitle = firstWork?.title ?? firstWork?.name;
+      return {
+        id: person.id,
+        name: person.name,
+        department:
+          person.known_for_department === 'Acting'
+            ? 'Актёр'
+            : person.known_for_department === 'Directing'
+              ? 'Режиссёр'
+              : 'Персона',
+        profilePath: person.profile_path ?? null,
+        knownForTitle,
+      };
+    });
+
+  return { titles, people };
 }
 
 function sortVideosByPriority(videos: VideoItem[]): VideoItem[] {

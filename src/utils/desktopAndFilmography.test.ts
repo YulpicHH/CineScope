@@ -16,6 +16,11 @@ import {
   type PersonCreditEntry,
 } from './personFilmography';
 import {
+  buildQuickSearchEntries,
+  getPlayerBrowserStatusInfo,
+  shouldOpenQuickSearchShortcut,
+} from './quickSearch';
+import {
   clearAllRouteViewCaches,
   getHomeRecommendedCache,
   getHomeSectionsCache,
@@ -364,5 +369,98 @@ describe('routeViewCache and Windows/macOS desktop back navigation', () => {
 
     assert.equal(isMouseBackButton(3), true);
     assert.equal(isMouseBackButton(0), false);
+  });
+});
+
+describe('quickSearch and dedicated browser selector helpers', () => {
+  it('ranks exact and prefix matches above loose matches and deduplicates titles/people', () => {
+    const entries = buildQuickSearchEntries(
+      {
+        titles: [
+          makeMovie({ id: 1, title: 'Новое начало', popularity: 95 }),
+          makeMovie({ id: 2, title: 'Начало', popularity: 50 }),
+          makeMovie({ id: 2, title: 'Начало', popularity: 50 }),
+          makeSeries({ id: 3, title: 'Начало эпохи', popularity: 40 }),
+        ],
+        people: [
+          { id: 10, name: 'Кристофер Нолан', department: 'Режиссёр', profilePath: null },
+          { id: 10, name: 'Кристофер Нолан', department: 'Режиссёр', profilePath: null },
+        ],
+      },
+      'Начало',
+    );
+
+    assert.equal(entries.length, 4);
+    assert.equal(entries[0].kind, 'title');
+    if (entries[0].kind === 'title') {
+      assert.equal(entries[0].item.id, 2);
+    }
+    assert.equal(entries[1].kind, 'title');
+    if (entries[1].kind === 'title') {
+      assert.equal(entries[1].item.id, 3);
+    }
+    assert.equal(entries[3].kind, 'person');
+  });
+
+  it('handles Cmd+K on macOS (including Russian layout) and Ctrl+K on Windows while ignoring inputs', () => {
+    assert.equal(
+      shouldOpenQuickSearchShortcut(
+        { key: 'k', code: 'KeyK', altKey: false, ctrlKey: false, metaKey: true, shiftKey: false },
+        'macos',
+        'BODY',
+      ),
+      true,
+    );
+    assert.equal(
+      shouldOpenQuickSearchShortcut(
+        { key: 'л', code: 'KeyK', altKey: false, ctrlKey: false, metaKey: true, shiftKey: false },
+        'macos',
+        'BODY',
+      ),
+      true,
+    );
+    assert.equal(
+      shouldOpenQuickSearchShortcut(
+        { key: 'k', code: 'KeyK', altKey: false, ctrlKey: true, metaKey: false, shiftKey: false },
+        'windows',
+        'BODY',
+      ),
+      true,
+    );
+    assert.equal(
+      shouldOpenQuickSearchShortcut(
+        { key: 'k', code: 'KeyK', altKey: false, ctrlKey: true, metaKey: false, shiftKey: false },
+        'windows',
+        'INPUT',
+      ),
+      false,
+    );
+  });
+
+  it('returns accurate browser readiness status for Windows and macOS profile panel', () => {
+    assert.deepEqual(
+      getPlayerBrowserStatusInfo('embedded_webkit', 'windows', null),
+      { text: 'WebView2 4K готов', tone: 'ready' },
+    );
+    assert.deepEqual(
+      getPlayerBrowserStatusInfo('embedded_webkit', 'macos', null),
+      { text: 'Внутри приложения', tone: 'neutral' },
+    );
+    assert.deepEqual(
+      getPlayerBrowserStatusInfo('firefox_window', 'macos', {
+        firefox: true,
+        chrome: false,
+        edge: false,
+      }),
+      { text: 'Firefox готов', tone: 'ready' },
+    );
+    assert.deepEqual(
+      getPlayerBrowserStatusInfo('edge_window', 'windows', {
+        firefox: true,
+        chrome: true,
+        edge: false,
+      }),
+      { text: 'Edge не найден — откроется встроенное окно', tone: 'warning' },
+    );
   });
 });

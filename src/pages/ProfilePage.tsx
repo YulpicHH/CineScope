@@ -1,10 +1,29 @@
-import { useState } from 'react';
-import { KeyRound, Moon, Sun, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, KeyRound, MonitorPlay, Moon, Sun, Trash2 } from 'lucide-react';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { useAppMode } from '../hooks/useAppMode';
 import { useLibrary } from '../hooks/useLibrary';
 import { useTheme } from '../hooks/useTheme';
 import { clearKinopoiskClientCache } from '../services/kinopoisk';
+import {
+  checkPlayerBrowsers,
+  getPlayerMode,
+  hasStoredPlayerMode,
+  setPlayerMode,
+  type AvailablePlayerBrowsers,
+} from '../services/playerSettings';
+import {
+  detectClientPlatform,
+  isDesktopTauriRuntime,
+  type DesktopPlatform,
+} from '../utils/platform';
+import {
+  getDefaultPlayerMode,
+  getPlayerModeOption,
+  getPlayerModeOptions,
+  type PlayerModeId,
+} from '../utils/playerProfile';
+import { getPlayerBrowserStatusInfo } from '../utils/quickSearch';
 
 export function ProfilePage() {
   const { theme, setTheme } = useTheme();
@@ -23,7 +42,55 @@ export function ProfilePage() {
     clearAllData,
   } = useLibrary();
 
+  const isDesktopTauri = isDesktopTauriRuntime();
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+
+  const [desktopPlatform, setDesktopPlatform] = useState<DesktopPlatform>(() =>
+    detectClientPlatform(),
+  );
+  const [playerMode, setPlayerModeState] = useState<PlayerModeId>(() =>
+    getPlayerMode(),
+  );
+  const [availableBrowsers, setAvailableBrowsers] =
+    useState<AvailablePlayerBrowsers | null>(null);
+  const [browserSavedMessage, setBrowserSavedMessage] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!isDesktopTauri) return;
+    let active = true;
+    void checkPlayerBrowsers().then((browsers) => {
+      if (!active) return;
+      setAvailableBrowsers(browsers);
+      setDesktopPlatform(browsers.platform);
+      if (!hasStoredPlayerMode()) {
+        setPlayerModeState(getDefaultPlayerMode(browsers.platform));
+      } else {
+        setPlayerModeState(getPlayerMode(browsers.platform));
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [isDesktopTauri]);
+
+  const handleSelectPlayerMode = (nextMode: PlayerModeId) => {
+    const saved = setPlayerMode(nextMode, desktopPlatform);
+    setPlayerModeState(saved);
+    const option = getPlayerModeOption(saved, desktopPlatform);
+    setBrowserSavedMessage(
+      `Выбран режим «${option.label} (${option.badge === '4K' ? 'до 4K' : option.badge})» — применится при следующем нажатии «Смотреть».`,
+    );
+  };
+
+  const playerModeOptions = getPlayerModeOptions(desktopPlatform);
+  const activePlayerOption = getPlayerModeOption(playerMode, desktopPlatform);
+  const browserStatus = getPlayerBrowserStatusInfo(
+    playerMode,
+    desktopPlatform,
+    availableBrowsers,
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -32,7 +99,9 @@ export function ProfilePage() {
           Профиль и настройки
         </h1>
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Локальные настройки оформления, API-ключей и управление сохранённой коллекцией.
+          {isDesktopTauri
+            ? 'Локальные настройки оформления, API-ключей, браузера для просмотра и управление сохранённой коллекцией.'
+            : 'Локальные настройки оформления, API-ключей и управление сохранённой коллекцией.'}
         </p>
       </div>
 
@@ -118,6 +187,99 @@ export function ProfilePage() {
           Настроить API-ключи
         </button>
       </section>
+
+      {/* Браузер для просмотра (отдельная панель для Windows и macOS) */}
+      {isDesktopTauri ? (
+        <section
+          data-testid="player-mode-section"
+          className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-5 dark:border-white/[0.08] dark:bg-[#11151E]"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <h2 className="font-display text-base font-semibold text-slate-950 dark:text-white">
+                  Браузер для просмотра
+                </h2>
+                {browserStatus ? (
+                  <span
+                    data-testid="browser-status-badge"
+                    className={`text-xs font-medium ${
+                      browserStatus.tone === 'ready'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : browserStatus.tone === 'warning'
+                          ? 'text-amber-600 dark:text-amber-300'
+                          : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    {browserStatus.text}
+                  </span>
+                ) : null}
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Выберите браузер, через который будет открываться окно просмотра по кнопке «Смотреть».
+              </p>
+            </div>
+            <MonitorPlay
+              className="h-5 w-5 shrink-0 text-blue-500"
+              aria-hidden="true"
+            />
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label="Выбор браузера для окна просмотра"
+            className="inline-flex flex-wrap gap-1 rounded-xl bg-slate-100 p-1 dark:bg-[#0B0E15]"
+          >
+            {playerModeOptions.map((option) => {
+              const selected = playerMode === option.id;
+              const isHighRes = option.badge === '4K';
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  data-testid={`player-mode-${option.id}`}
+                  onClick={() => handleSelectPlayerMode(option.id)}
+                  className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${
+                    selected
+                      ? 'bg-white text-slate-950 shadow-sm dark:bg-[#1B2230] dark:text-white'
+                      : 'text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white'
+                  }`}
+                >
+                  <span className="whitespace-nowrap">{option.label}</span>
+                  <span
+                    className={`whitespace-nowrap text-xs font-medium ${
+                      isHighRes
+                        ? selected
+                          ? 'text-blue-600 dark:text-blue-300'
+                          : 'text-blue-600/80 dark:text-blue-400/85'
+                        : 'text-slate-400 dark:text-slate-500'
+                    }`}
+                  >
+                    {isHighRes ? 'до 4K' : option.badge}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+            {activePlayerOption.description}
+          </p>
+
+          {browserSavedMessage ? (
+            <p
+              role="status"
+              data-testid="player-mode-saved-status"
+              className="inline-flex items-center gap-2 text-xs font-medium text-emerald-600 dark:text-emerald-400"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>{browserSavedMessage}</span>
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* Локальные данные */}
       <section className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-5 dark:border-white/[0.08] dark:bg-[#11151E]">

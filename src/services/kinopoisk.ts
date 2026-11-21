@@ -279,6 +279,7 @@ async function fetchResolutionFromBackend(
       body: JSON.stringify(params),
     });
 
+    const contentType = response.headers.get('content-type') ?? '';
     const data = (await response.json().catch(() => null)) as
       | {
           status?: unknown;
@@ -294,9 +295,17 @@ async function fetchResolutionFromBackend(
       | null;
 
     if (!data || typeof data !== 'object') {
+      let message =
+        'Сервер вернул некорректный ответ при проверке источника просмотра.';
+      if (response.status >= 500) {
+        message = `Ошибка сервера (${response.status}) при проверке источника просмотра. Попробуйте повторить чуть позже.`;
+      } else if (contentType.toLowerCase().includes('text/html')) {
+        message =
+          'API поиска источника недоступно на этом сервере. Обновите страницу или проверьте деплой.';
+      }
       return {
         status: 'error',
-        message: 'Сервер вернул некорректный ответ при проверке источника просмотра.',
+        message,
         retryable: true,
       };
     }

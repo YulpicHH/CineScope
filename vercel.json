@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
       "source": "/((?!api/|assets/|icons/|manifest\\.webmanifest$|sw\\.js$|apple-touch-icon\\.png$).*)",
       "destination": "/index.html"
     }

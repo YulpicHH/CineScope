@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bookmark, Check, Info, Sparkles, Star } from 'lucide-react';
+import { BookOpen, Bookmark, Check, Info, Sparkles, Star } from 'lucide-react';
 import { MediaCarousel } from '../components/cards/MediaCarousel';
+import { DescriptionModal } from '../components/ui/DescriptionModal';
 import { BackdropArtwork, PosterArtwork } from '../components/ui/PosterArtwork';
 import { HeroSkeleton } from '../components/ui/Skeleton';
 import { ErrorState } from '../components/ui/StateViews';
@@ -24,6 +25,7 @@ export function HomePage() {
 
   const [recommended, setRecommended] = useState<MediaItem[]>([]);
   const [recLoading, setRecLoading] = useState(true);
+  const [heroDescriptionOpen, setHeroDescriptionOpen] = useState(false);
 
   const loadHome = useCallback(async () => {
     setLoading(true);
@@ -159,16 +161,28 @@ export function HomePage() {
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <Link
                   to={`/title/${hero.mediaType}/${hero.id}`}
-                  className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-blue-400"
+                  className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-blue-400"
                 >
                   <Info className="h-4 w-4" aria-hidden="true" />
                   Подробнее
                 </Link>
 
+                {hero.overview ? (
+                  <button
+                    type="button"
+                    data-testid="hero-open-description-button"
+                    onClick={() => setHeroDescriptionOpen(true)}
+                    className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-blue-400"
+                  >
+                    <BookOpen className="h-4 w-4" aria-hidden="true" />
+                    Описание
+                  </button>
+                ) : null}
+
                 <button
                   type="button"
                   onClick={() => toggleWatchlist(hero)}
-                  className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-white/20 bg-white/15 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/25 focus-visible:outline-2 focus-visible:outline-blue-400"
+                  className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-white/20 bg-white/15 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/25 focus-visible:outline-2 focus-visible:outline-blue-400"
                 >
                   {heroInCollection ? (
                     <>
@@ -187,7 +201,7 @@ export function HomePage() {
 
                 <Link
                   to="/catalog?panel=mood"
-                  className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-violet-400/30 bg-violet-500/20 px-4 py-2.5 text-sm font-medium text-violet-200 transition-colors hover:bg-violet-500/30"
+                  className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-violet-400/30 bg-violet-500/20 px-4 py-2.5 text-sm font-medium text-violet-200 transition-colors hover:bg-violet-500/30"
                 >
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
                   Подобрать на вечер
@@ -261,6 +275,22 @@ export function HomePage() {
             loading={loading}
           />
         </>
+      ) : null}
+
+      {hero ? (
+        <DescriptionModal
+          open={heroDescriptionOpen}
+          onClose={() => setHeroDescriptionOpen(false)}
+          title={hero.title}
+          originalTitle={hero.originalTitle}
+          mediaType={hero.mediaType}
+          year={hero.year}
+          genres={hero.genres.map((g) => g.name)}
+          voteAverage={hero.voteAverage}
+          isDemoData={hero.isDemoData}
+          overview={hero.overview}
+          detailsHref={`/title/${hero.mediaType}/${hero.id}`}
+        />
       ) : null}
     </div>
   );

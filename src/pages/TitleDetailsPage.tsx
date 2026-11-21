@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  BookOpen,
   Bookmark,
   Check,
   ExternalLink,
@@ -15,6 +16,7 @@ import {
   User as UserIcon,
 } from 'lucide-react';
 import { MediaCarousel } from '../components/cards/MediaCarousel';
+import { DescriptionModal } from '../components/ui/DescriptionModal';
 import { BackdropArtwork, PosterArtwork } from '../components/ui/PosterArtwork';
 import { DetailsSkeleton } from '../components/ui/Skeleton';
 import { ErrorState } from '../components/ui/StateViews';
@@ -71,6 +73,7 @@ export function TitleDetailsPage() {
   const [watchRetryCount, setWatchRetryCount] = useState(0);
   const [missingKeyNotice, setMissingKeyNotice] = useState(false);
   const [watchWindowError, setWatchWindowError] = useState<string | null>(null);
+  const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
 
   const loadDetails = useCallback(async () => {
     if (!Number.isFinite(id) || id <= 0) {
@@ -80,6 +83,7 @@ export function TitleDetailsPage() {
     }
     setLoading(true);
     setError(null);
+    setIsDescriptionOpen(false);
     setWatchState({ status: 'idle' });
     try {
       const data = await getTitleDetails(mediaType, id, isDemoMode);
@@ -268,9 +272,22 @@ export function TitleDetailsPage() {
               </div>
 
               {item.overview ? (
-                <p className="max-w-3xl text-sm leading-relaxed text-slate-200 sm:text-base">
-                  {item.overview}
-                </p>
+                <div className="max-w-3xl space-y-2.5">
+                  <p className="line-clamp-4 text-sm leading-relaxed text-slate-200 sm:text-base">
+                    {item.overview}
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      data-testid="open-description-modal-button"
+                      onClick={() => setIsDescriptionOpen(true)}
+                      className="inline-flex min-h-[40px] items-center gap-2 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.08] px-3.5 py-2 text-xs font-semibold text-blue-200 transition-colors hover:bg-white/[0.15] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
+                    >
+                      <BookOpen className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <span>Открыть описание</span>
+                    </button>
+                  </div>
+                </div>
               ) : null}
 
               {/* Создатели */}
@@ -662,6 +679,23 @@ export function TitleDetailsPage() {
       {similar.length > 0 ? (
         <MediaCarousel title="Похожие тайтлы" items={similar} />
       ) : null}
+
+      <DescriptionModal
+        open={isDescriptionOpen}
+        onClose={() => setIsDescriptionOpen(false)}
+        title={item.title}
+        originalTitle={item.originalTitle}
+        mediaType={item.mediaType}
+        year={item.year}
+        durationLabel={durationLabel}
+        genres={item.genres.map((g) => g.name)}
+        countries={countries}
+        voteAverage={item.voteAverage}
+        isDemoData={item.isDemoData}
+        overview={item.overview}
+        directors={directors.map((d) => d.name)}
+        writers={writers.map((w) => w.name)}
+      />
     </div>
   );
 }

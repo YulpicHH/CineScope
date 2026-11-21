@@ -120,6 +120,50 @@ test('findNextFocusableIndex prefers same-row elements when moving horizontally 
   assert.equal(findNextFocusableIndex(candidates[0], candidates, 'right', 0), 1);
 });
 
+test('findNextFocusableIndex moves down from ALL stacked Catalog tabs (Все / Фильмы / Сериалы / Аниме) to full-width Search bar instead of skipping to Country select', () => {
+  const layout: FocusRect[] = [
+    rect(40, 140, 60, 40), // 0: Все
+    rect(100, 140, 88, 40), // 1: Фильмы
+    rect(188, 140, 94, 40), // 2: Сериалы
+    rect(282, 140, 76, 40), // 3: Аниме
+    rect(40, 192, 880, 44), // 4: Полная строка поиска во всю ширину
+    rect(40, 264, 180, 42), // 5: Выбор страны
+    rect(236, 264, 180, 42), // 6: Сортировка
+  ];
+
+  // Из каждой вкладки движение Вниз должно попадать именно в строку поиска (индекс 4)
+  assert.equal(findNextFocusableIndex(layout[0], layout, 'down', 0), 4);
+  assert.equal(findNextFocusableIndex(layout[1], layout, 'down', 1), 4);
+  assert.equal(findNextFocusableIndex(layout[2], layout, 'down', 2), 4);
+  assert.equal(findNextFocusableIndex(layout[3], layout, 'down', 3), 4);
+
+  // От «Выбор страны» вверх возвращаемся в строку поиска
+  assert.equal(findNextFocusableIndex(layout[5], layout, 'up', 5), 4);
+
+  // На правом краю ряда вкладок («Аниме») нажатие Вправо НЕ должно прыгать вниз на строку поиска
+  assert.equal(findNextFocusableIndex(layout[3], layout, 'right', 3), -1);
+  // На левом краю («Все») нажатие Влево остаётся на месте
+  assert.equal(findNextFocusableIndex(layout[0], layout, 'left', 0), -1);
+});
+
+test('findNextFocusableIndex stops at row edges when moving horizontally and never jumps to another row', () => {
+  const rows: FocusRect[] = [
+    rect(40, 100, 160, 240), // 0: row 0, col 0
+    rect(220, 100, 160, 240), // 1: row 0, col 1 (end of row 0)
+    rect(40, 360, 160, 240), // 2: row 1, col 0 (start of row 1)
+    rect(220, 360, 160, 240), // 3: row 1, col 1
+    rect(400, 360, 160, 240), // 4: row 1, col 2 (extends further right than row 0!)
+  ];
+
+  // На правом краю первой строки НЕ перепрыгиваем вниз на (1, 2), хотя он правее по X
+  assert.equal(findNextFocusableIndex(rows[1], rows, 'right', 1), -1);
+  // На левом краю второй строки НЕ перепрыгиваем вверх на первую строку
+  assert.equal(findNextFocusableIndex(rows[2], rows, 'left', 2), -1);
+  // Даже если карточка увеличена через scale(1.04) и задевает нижний ряд на 3px, вправо остаёмся на краю
+  const slightlyScaledEdge = rect(216, 97, 168, 266);
+  assert.equal(findNextFocusableIndex(slightlyScaledEdge, rows, 'right', 1), -1);
+});
+
 test('findNextFocusableIndex moves from header button down to misaligned hero button cleanly', () => {
   const headerSettingsBtn = rect(1100, 20, 44, 44);
   const candidates: FocusRect[] = [
@@ -131,6 +175,8 @@ test('findNextFocusableIndex moves from header button down to misaligned hero bu
 
   assert.equal(findNextFocusableIndex(headerSettingsBtn, candidates, 'down', 2), 3);
   assert.equal(findNextFocusableIndex(headerSettingsBtn, candidates, 'left', 2), 1);
+  // На правом краю шапки вправо ничего нет — остаёмся на кнопке настроек
+  assert.equal(findNextFocusableIndex(headerSettingsBtn, candidates, 'right', 2), -1);
 });
 
 test('isAndroidTvUserAgent and isAndroidUserAgent detect SberBox / SaluteTV / Android TV accurately', () => {

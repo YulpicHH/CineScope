@@ -151,6 +151,16 @@ export function findNextFocusableIndex(
     let score: number;
 
     if (direction === 'left' || direction === 'right') {
+      const overlapY = Math.max(
+        0,
+        Math.min(origin.bottom, c.bottom) - Math.max(origin.top, c.top),
+      );
+      const minRequiredOverlap = Math.min(6, Math.min(origin.height, c.height) * 0.2);
+      // Строго остаёмся в пределах текущей строки: на краю строки фокус никуда не перепрыгивает
+      if (overlapY <= minRequiredOverlap) {
+        continue;
+      }
+
       const edgeGap =
         direction === 'right'
           ? Math.max(0, c.left - origin.right)
@@ -158,16 +168,9 @@ export function findNextFocusableIndex(
       const centerDist = Math.abs(cx - ox);
       // Монотонная метрика без скачка при edgeGap === 0: соприкасающийся сосед всегда ближе, чем элемент через один
       const primary = edgeGap + centerDist * 0.08;
-
-      const overlapY = Math.max(
-        0,
-        Math.min(origin.bottom, c.bottom) - Math.max(origin.top, c.top),
-      );
       const crossDist = Math.abs(cy - oy);
-      const secondary = overlapY > 0 ? crossDist * 0.35 : crossDist;
-      const alignmentPenalty = overlapY > 0 ? 0 : 120;
 
-      score = primary + secondary * 2.6 + alignmentPenalty;
+      score = primary + crossDist * 0.9;
     } else {
       const edgeGap =
         direction === 'down'
@@ -180,8 +183,15 @@ export function findNextFocusableIndex(
         0,
         Math.min(origin.right, c.right) - Math.max(origin.left, c.left),
       );
-      const crossDist = Math.abs(cx - ox);
-      const secondary = overlapX > 0 ? crossDist * 0.35 : crossDist;
+      // Для широких элементов (например, строка поиска во всю ширину под вкладками «Все»/«Фильмы»)
+      // измеряем горизонтальное расстояние до ближайшего края [left, right], а не только до центра cx
+      const spanDistX =
+        ox < c.left ? c.left - ox : ox > c.right ? ox - c.right : 0;
+      const centerDistX = Math.abs(cx - ox);
+      const secondary =
+        overlapX > 0
+          ? spanDistX * 0.6 + centerDistX * 0.04
+          : spanDistX * 1.4 + centerDistX * 0.12;
       const alignmentPenalty = overlapX > 0 ? 0 : 80;
 
       score = primary + secondary * 2.2 + alignmentPenalty;

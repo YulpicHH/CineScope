@@ -2,8 +2,10 @@ import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { isTvMode } from '../utils/platform';
 import {
+  computeNextScrollStep,
   findNextFocusableIndex,
   mapKeyToTvAction,
+  selectSpatialCandidateIndex,
   shouldAcceptTvKeyEvent,
   type FocusRect,
   type TvDirection,
@@ -29,6 +31,8 @@ const TV_FOCUSED_CLASS = 'tv-focused';
 interface FocusableCandidate {
   el: HTMLElement;
   rect: FocusRect;
+  inMain: boolean;
+  inHeader: boolean;
 }
 
 function isElementVisible(el: HTMLElement): boolean {
@@ -62,9 +66,13 @@ function getTopmostModal(): HTMLElement | null {
   return dialogs[dialogs.length - 1];
 }
 
-function getFocusableItemsWithRects(scope: ParentNode): FocusableCandidate[] {
+function getFocusableItemsWithRects(
+  scope: ParentNode,
+  useDocumentSpace = false,
+): FocusableCandidate[] {
   const raw = scope.querySelectorAll<HTMLElement>(TV_FOCUSABLE_SELECTOR);
   const result: FocusableCandidate[] = [];
+  const docOffsetY = useDocumentSpace ? window.scrollY : 0;
 
   for (let i = 0; i < raw.length; i += 1) {
     const el = raw[i];
@@ -85,13 +93,20 @@ function getFocusableItemsWithRects(scope: ParentNode): FocusableCandidate[] {
       continue;
     }
 
+    const inHeader = Boolean(el.closest('header'));
+    const inMain = !inHeader && Boolean(el.closest('main'));
+    // Sticky-шапка всегда закреплена в самом верху документа (0..headerHeight), а не поверх прокрученных рядов фильмов
+    const yShift = useDocumentSpace && !inHeader ? docOffsetY : 0;
+
     result.push({
       el,
+      inMain,
+      inHeader,
       rect: {
         left: rect.left,
-        top: rect.top,
+        top: rect.top + yShift,
         right: rect.right,
-        bottom: rect.bottom,
+        bottom: rect.bottom + yShift,
         width: rect.width,
         height: rect.height,
       },
@@ -102,12 +117,7 @@ function getFocusableItemsWithRects(scope: ParentNode): FocusableCandidate[] {
 }
 
 function getFocusableElements(scope: ParentNode): HTMLElement[] {
-  return getFocusableItemsWithRects(scope).map((item) => item.el);
-}
-
-function easeOutCubic(t: number): number {
-  const inv = 1 - t;
-  return 1 - inv * inv * inv;
+  return getFocusableItemsWithRects(scope, false).map((item) => item.el);
 }
 
 function findVerticalScrollContainer(el: HTMLElement): HTMLElement | null {
@@ -259,6 +269,7 @@ export function useTvNavigation(): void {
   const activeModalRef = useRef<HTMLElement | null>(null);
   const editingInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const pendingRouteAutofocusRef = useRef(false);
+  const cancelScrollAnimRef = useRef<(() => void) | null>(null);
   const lastKeyActionRef = useRef<TvRemoteAction>(null);
   const lastKeyTimeRef = useRef(0);
   const locationRef = useRef(location);
@@ -328,151 +339,239 @@ export function useTvNavigation(): void {
     };
 
     let scrollAnimRafId: number | null = null;
+    let lastAnimFrameTime = 0;
+    let winTargetY: number | null = null;
+    let hScrollState: { el: HTMLElement; targetX: number } | null = null;
+    let vScrollState: { el: HTMLElement; targetY: number; speed: number } | null = null;
 
     const cancelActiveScrollAnim = () => {
       if (scrollAnimRafId !== null) {
         window.cancelAnimationFrame(scrollAnimRafId);
         scrollAnimRafId = null;
       }
+      lastAnimFrameTime = 0;
+      winTargetY = null;
+      hScrollState = null;
+      vScrollState = null;
+    };
+    cancelScrollAnimRef.current = cancelActiveScrollAnim;
+
+    const ensureSmoothScrollLoop = () => {
+      if (scrollAnimRafId !== null) return;
+      lastAnimFrameTime = performance.now();
+
+      const tick = (now: number) => {
+        const dt = Math.min(0.05, Math.max(0.004, (now - lastAnimFrameTime) / 1000));
+        lastAnimFrameTime = now;
+        let hasPending = false;
+
+        // Непрерывное экспоненциальное сглаживание: плавный разгон и мягкое торможение
+        // без резких перезапусков и очереди анимаций даже при удержании стрелки пульта
+        const mainAlpha = 1 - Math.exp(-dt * 11.5);
+
+        if (winTargetY !== null) {
+          const currentY = window.scrollY;
+          const diff = winTargetY - currentY;
+          if (Math.abs(diff) <= 1.2) {
+            window.scrollTo(window.scrollX, winTargetY);
+            winTargetY = null;
+          } else {
+            window.scrollTo(window.scrollX, currentY + diff * mainAlpha);
+            hasPending = true;
+          }
+        }
+
+        if (hScrollState) {
+          if (!hScrollState.el.isConnected) {
+            hScrollState = null;
+          } else {
+            const currentX = hScrollState.el.scrollLeft;
+            const diff = hScrollState.targetX - currentX;
+            if (Math.abs(diff) <= 1.2) {
+              hScrollState.el.scrollLeft = hScrollState.targetX;
+              hScrollState = null;
+            } else {
+              hScrollState.el.scrollLeft = currentX + diff * mainAlpha;
+              hasPending = true;
+            }
+          }
+        }
+
+        if (vScrollState) {
+          if (!vScrollState.el.isConnected) {
+            vScrollState = null;
+          } else {
+            const vAlpha = 1 - Math.exp(-dt * vScrollState.speed);
+            const currentTop = vScrollState.el.scrollTop;
+            const diff = vScrollState.targetY - currentTop;
+            if (Math.abs(diff) <= 1.2) {
+              vScrollState.el.scrollTop = vScrollState.targetY;
+              vScrollState = null;
+            } else {
+              vScrollState.el.scrollTop = currentTop + diff * vAlpha;
+              hasPending = true;
+            }
+          }
+        }
+
+        if (hasPending) {
+          scrollAnimRafId = window.requestAnimationFrame(tick);
+        } else {
+          scrollAnimRafId = null;
+          lastAnimFrameTime = 0;
+        }
+      };
+
+      scrollAnimRafId = window.requestAnimationFrame(tick);
+    };
+
+    const smoothScrollModalBody = (
+      scrollBody: HTMLElement,
+      direction: 'up' | 'down',
+    ): boolean => {
+      const maxScroll = Math.max(0, scrollBody.scrollHeight - scrollBody.clientHeight);
+      if (maxScroll <= 4) return false;
+
+      const baseTop =
+        vScrollState && vScrollState.el === scrollBody
+          ? vScrollState.targetY
+          : scrollBody.scrollTop;
+      const stepPx = Math.max(96, Math.min(148, Math.round(scrollBody.clientHeight * 0.34)));
+      const { nextScrollTop, didScroll } = computeNextScrollStep(
+        baseTop,
+        maxScroll,
+        direction,
+        stepPx,
+      );
+      if (!didScroll) return false;
+
+      const prefersReducedMotion =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      if (prefersReducedMotion) {
+        scrollBody.scrollTop = nextScrollTop;
+        return true;
+      }
+
+      vScrollState = {
+        el: scrollBody,
+        targetY: nextScrollTop,
+        speed: 9.5,
+      };
+      ensureSmoothScrollLoop();
+      return true;
     };
 
     /**
-     * Плавная, отменяемая прокрутка только при выходе элемента за безопасные границы экрана.
-     * В отличие от scrollIntoView({ behavior: 'smooth' }), не накапливает очередь конкурирующих
-     * анимаций в Android WebView при быстром перелистывании или удержании кнопки пульта.
+     * Непрерывная плавная прокрутка только при выходе элемента за безопасные границы экрана.
+     * Работает через единый rAF-цикл отслеживания цели, поэтому при удержании или быстрых
+     * нажатиях экран плавно скользит без дёрганья, резких скачков и задержек.
      */
-    const smoothScrollToElement = (target: HTMLElement, isRapid: boolean) => {
-      cancelActiveScrollAnim();
-
+    const smoothScrollToElement = (target: HTMLElement) => {
       const targetRect = target.getBoundingClientRect();
       const modal = getTopmostModal();
+      const prefersReducedMotion =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      let scheduled = false;
 
       // 1. Горизонтальный контейнер (карусели фильмов, лента актёров)
       const hContainer = findHorizontalScrollContainer(target);
-      let hStart = 0;
-      let hDelta = 0;
       if (hContainer) {
         const containerRect = hContainer.getBoundingClientRect();
         const padX = 28;
+        let hDelta = 0;
         if (targetRect.left < containerRect.left + padX) {
           hDelta = targetRect.left - (containerRect.left + padX);
         } else if (targetRect.right > containerRect.right - padX) {
           hDelta = targetRect.right - (containerRect.right - padX);
         }
-        if (Math.abs(hDelta) >= 2) {
-          hStart = hContainer.scrollLeft;
+        if (Math.abs(hDelta) >= 3) {
           const maxScrollLeft = Math.max(0, hContainer.scrollWidth - hContainer.clientWidth);
-          const clampedTarget = Math.min(maxScrollLeft, Math.max(0, hStart + hDelta));
-          hDelta = clampedTarget - hStart;
-        } else {
-          hDelta = 0;
+          const nextX = Math.min(maxScrollLeft, Math.max(0, hContainer.scrollLeft + hDelta));
+          if (Math.abs(nextX - hContainer.scrollLeft) >= 2) {
+            if (prefersReducedMotion) {
+              hContainer.scrollLeft = nextX;
+            } else {
+              hScrollState = { el: hContainer, targetX: nextX };
+              scheduled = true;
+            }
+          }
         }
       }
 
       // 2. Вертикальная прокрутка (модальное окно или основная страница)
       const vContainer = modal ? findVerticalScrollContainer(target) : null;
-      let vStart = 0;
-      let vDelta = 0;
 
       if (vContainer) {
         const containerRect = vContainer.getBoundingClientRect();
         const padY = 24;
+        let vDelta = 0;
         if (targetRect.top < containerRect.top + padY) {
           vDelta = targetRect.top - (containerRect.top + padY);
         } else if (targetRect.bottom > containerRect.bottom - padY) {
           vDelta = targetRect.bottom - (containerRect.bottom - padY);
         }
-        if (Math.abs(vDelta) >= 2) {
-          vStart = vContainer.scrollTop;
+        if (Math.abs(vDelta) >= 3) {
           const maxScrollTop = Math.max(0, vContainer.scrollHeight - vContainer.clientHeight);
-          const clampedTarget = Math.min(maxScrollTop, Math.max(0, vStart + vDelta));
-          vDelta = clampedTarget - vStart;
-        } else {
-          vDelta = 0;
+          const nextTop = Math.min(maxScrollTop, Math.max(0, vContainer.scrollTop + vDelta));
+          if (Math.abs(nextTop - vContainer.scrollTop) >= 2) {
+            if (prefersReducedMotion) {
+              vContainer.scrollTop = nextTop;
+            } else {
+              vScrollState = { el: vContainer, targetY: nextTop, speed: 11.5 };
+              scheduled = true;
+            }
+          }
         }
       } else if (!modal) {
-        // Не дёргаем вертикальный скролл, если элемент внутри sticky-шапки
         const insideHeader = Boolean(target.closest('header'));
         if (!insideHeader) {
           const headerEl = document.querySelector<HTMLElement>('header');
           const headerBottom = headerEl ? Math.max(0, headerEl.getBoundingClientRect().bottom) : 0;
           const safeTop = headerBottom + 28;
-          const safeBottom = window.innerHeight - 32;
+          const safeBottom = window.innerHeight - 36;
+          let vDelta = 0;
 
           if (targetRect.top < safeTop) {
-            // Смещаем аккуратно с небольшим запасом, чтобы следующая строка была видна
-            const desiredTop = Math.max(safeTop, Math.min(window.innerHeight * 0.3, safeTop + 64));
+            const desiredTop = Math.max(safeTop, Math.min(window.innerHeight * 0.28, safeTop + 56));
             vDelta = targetRect.top - desiredTop;
           } else if (targetRect.bottom > safeBottom) {
             const desiredBottom = Math.min(
               safeBottom,
-              Math.max(window.innerHeight * 0.72, safeBottom - 64),
+              Math.max(window.innerHeight * 0.72, safeBottom - 56),
             );
             vDelta = targetRect.bottom - desiredBottom;
           }
 
           if (Math.abs(vDelta) >= 4) {
-            vStart = window.scrollY;
             const maxWindowY = Math.max(
               0,
               document.documentElement.scrollHeight - window.innerHeight,
             );
-            const clampedTarget = Math.min(maxWindowY, Math.max(0, vStart + vDelta));
-            vDelta = clampedTarget - vStart;
-          } else {
-            vDelta = 0;
+            const nextY = Math.min(maxWindowY, Math.max(0, window.scrollY + vDelta));
+            if (Math.abs(nextY - window.scrollY) >= 3) {
+              if (prefersReducedMotion) {
+                window.scrollTo(window.scrollX, nextY);
+              } else {
+                winTargetY = nextY;
+                scheduled = true;
+              }
+            }
           }
         }
       }
 
-      if (hDelta === 0 && vDelta === 0) {
-        return;
+      if (scheduled) {
+        ensureSmoothScrollLoop();
       }
-
-      const prefersReducedMotion =
-        typeof window.matchMedia === 'function' &&
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const durationMs = prefersReducedMotion ? 0 : isRapid ? 75 : 155;
-
-      if (durationMs <= 0) {
-        if (hContainer && hDelta !== 0) {
-          hContainer.scrollLeft = hStart + hDelta;
-        }
-        if (vDelta !== 0) {
-          if (vContainer) vContainer.scrollTop = vStart + vDelta;
-          else window.scrollTo(window.scrollX, vStart + vDelta);
-        }
-        return;
-      }
-
-      const startTime = performance.now();
-      const step = (now: number) => {
-        const progress = Math.min(1, (now - startTime) / durationMs);
-        const eased = easeOutCubic(progress);
-
-        if (hContainer && hDelta !== 0) {
-          hContainer.scrollLeft = hStart + hDelta * eased;
-        }
-        if (vDelta !== 0) {
-          const nextY = vStart + vDelta * eased;
-          if (vContainer) vContainer.scrollTop = nextY;
-          else window.scrollTo(window.scrollX, nextY);
-        }
-
-        if (progress < 1) {
-          scrollAnimRafId = window.requestAnimationFrame(step);
-        } else {
-          scrollAnimRafId = null;
-        }
-      };
-
-      scrollAnimRafId = window.requestAnimationFrame(step);
     };
 
     const applyFocus = (
       target: HTMLElement | null,
       scrollIntoView = true,
-      isRapid = false,
     ) => {
       if (!target || !isElementVisible(target)) return;
 
@@ -496,7 +595,7 @@ export function useTvNavigation(): void {
       lastFocusedRef.current = target;
 
       if (scrollIntoView) {
-        smoothScrollToElement(target, isRapid);
+        smoothScrollToElement(target);
       }
     };
 
@@ -575,14 +674,18 @@ export function useTvNavigation(): void {
       }
     };
 
-    const moveFocusInDirection = (
-      direction: TvDirection,
-      isRapid = false,
-    ): boolean => {
+    const moveFocusInDirection = (direction: TvDirection): boolean => {
       const modal = getTopmostModal();
       const scope = modal ?? document.body;
-      const items = getFocusableItemsWithRects(scope);
-      if (items.length === 0) return false;
+
+      // В мини-окне описания стрелки Вверх/Вниз плавно прокручивают длинный текст по 3–4 строки,
+      // а не перескакивают мгновенно от самого начала в самый конец
+      if (modal && (direction === 'up' || direction === 'down')) {
+        const scrollBody = modal.querySelector<HTMLElement>('[data-tv-scroll-body="true"]');
+        if (scrollBody && smoothScrollModalBody(scrollBody, direction)) {
+          return true;
+        }
+      }
 
       const current =
         document.activeElement instanceof HTMLElement &&
@@ -598,32 +701,57 @@ export function useTvNavigation(): void {
       if (!current) {
         const first = pickInitialFocusTarget(scope, !modal);
         if (first) {
-          applyFocus(first, true, isRapid);
+          applyFocus(first, true);
           return true;
         }
         return false;
       }
 
+      const originInHeader = !modal && Boolean(current.closest('header'));
+      const originInMain = !modal && !originInHeader && Boolean(current.closest('main'));
+      // Для прокручиваемой страницы используем координаты документа, чтобы sticky-шапка
+      // никогда не «вклинивалась» между прокрученными рядами фильмов; при движении вниз из шапки — видимую область
+      const useDocumentSpace = !modal && !(originInHeader && direction === 'down');
+      const items = getFocusableItemsWithRects(scope, useDocumentSpace);
+      if (items.length === 0) return false;
+
       let currentIndex = -1;
       const rects: FocusRect[] = new Array(items.length);
+      const inMainFlags: boolean[] = new Array(items.length);
       for (let i = 0; i < items.length; i += 1) {
         if (items[i].el === current) {
           currentIndex = i;
         }
         rects[i] = items[i].rect;
+        inMainFlags[i] = items[i].inMain;
       }
 
-      const originRect =
-        currentIndex >= 0 ? rects[currentIndex] : toFocusRect(current);
-      const nextIndex = findNextFocusableIndex(
-        originRect,
-        rects,
-        direction,
-        currentIndex,
-      );
+      let originRect: FocusRect;
+      if (currentIndex >= 0) {
+        originRect = rects[currentIndex];
+      } else {
+        const rawOrigin = toFocusRect(current);
+        const yShift = useDocumentSpace && !originInHeader ? window.scrollY : 0;
+        originRect = {
+          ...rawOrigin,
+          top: rawOrigin.top + yShift,
+          bottom: rawOrigin.bottom + yShift,
+        };
+      }
+
+      const nextIndex = modal
+        ? findNextFocusableIndex(originRect, rects, direction, currentIndex)
+        : selectSpatialCandidateIndex(
+            originRect,
+            rects,
+            direction,
+            currentIndex,
+            originInMain,
+            inMainFlags,
+          );
 
       if (nextIndex >= 0 && items[nextIndex]) {
-        applyFocus(items[nextIndex].el, true, isRapid);
+        applyFocus(items[nextIndex].el, true);
         return true;
       }
 
@@ -681,8 +809,6 @@ export function useTvNavigation(): void {
         event.stopImmediatePropagation();
         return;
       }
-      const isRapid =
-        event.repeat || (prevKeyTime > 0 && now - prevKeyTime < 185);
       lastKeyActionRef.current = action;
       lastKeyTimeRef.current = now;
 
@@ -726,7 +852,7 @@ export function useTvNavigation(): void {
           event.stopPropagation();
           event.stopImmediatePropagation();
           exitTvInputEditMode(activeTextInput, false);
-          moveFocusInDirection(action, isRapid);
+          moveFocusInDirection(action);
           return;
         }
 
@@ -773,7 +899,7 @@ export function useTvNavigation(): void {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      moveFocusInDirection(action, isRapid);
+      moveFocusInDirection(action);
     };
 
     // Отслеживаем открытие/закрытие модалок, появление новых полей ввода и удаление сфокусированных элементов
@@ -888,6 +1014,7 @@ export function useTvNavigation(): void {
 
     return () => {
       cancelActiveScrollAnim();
+      cancelScrollAnimRef.current = null;
       window.clearTimeout(initTimer);
       if (rafId !== null) {
         window.cancelAnimationFrame(rafId);
@@ -911,6 +1038,7 @@ export function useTvNavigation(): void {
   useEffect(() => {
     if (!tvEnabled || typeof document === 'undefined') return;
 
+    cancelScrollAnimRef.current?.();
     pendingRouteAutofocusRef.current = true;
 
     const focusRouteStart = () => {

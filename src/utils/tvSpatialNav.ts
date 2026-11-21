@@ -208,7 +208,9 @@ export function findNextFocusableIndex(
           ? Math.max(0, c.top - origin.bottom)
           : Math.max(0, origin.top - c.bottom);
       const centerDist = Math.abs(cy - oy);
-      const primary = edgeGap + centerDist * 0.08;
+      // Строгий приоритет ближайшей соседней строки по вертикали, чтобы фокус не перепрыгивал
+      // через ближайшую строку (например, «Открыть описание») к далёкому элементу на другой строке
+      const primary = edgeGap * 3.0 + centerDist * 0.1;
 
       const overlapX = Math.max(
         0,
@@ -221,11 +223,11 @@ export function findNextFocusableIndex(
       const centerDistX = Math.abs(cx - ox);
       const secondary =
         overlapX > 0
-          ? spanDistX * 0.6 + centerDistX * 0.04
-          : spanDistX * 1.4 + centerDistX * 0.12;
-      const alignmentPenalty = overlapX > 0 ? 0 : 80;
+          ? spanDistX * 0.4 + centerDistX * 0.03
+          : spanDistX * 0.65 + centerDistX * 0.05;
+      const alignmentPenalty = overlapX > 0 ? 0 : 35;
 
-      score = primary + secondary * 2.2 + alignmentPenalty;
+      score = primary + secondary + alignmentPenalty;
     }
 
     if (score < bestScore) {
@@ -235,4 +237,75 @@ export function findNextFocusableIndex(
   }
 
   return bestIndex;
+}
+
+/**
+ * Выбирает следующий элемент с учётом областей страницы (<main> vs <header>):
+ * если фокус находится внутри <main> и пользователь нажимает «Вверх»,
+ * сначала ищем элементы строго внутри <main> (ряды фильмов выше, фильтры, «Открыть описание», «К каталогу»),
+ * и переходим в верхнюю шапку (<header>) ТОЛЬКО когда выше в <main> ничего не осталось.
+ */
+export function selectSpatialCandidateIndex(
+  origin: FocusRect,
+  candidates: readonly FocusRect[],
+  direction: TvDirection,
+  currentIndex: number,
+  originInMain: boolean,
+  candidateInMain: readonly boolean[],
+): number {
+  if (originInMain && direction === 'up') {
+    const mainRects: FocusRect[] = [];
+    const mainToOriginal: number[] = [];
+    let mappedCurrent = -1;
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (candidateInMain[i]) {
+        if (i === currentIndex) {
+          mappedCurrent = mainRects.length;
+        }
+        mainRects.push(candidates[i]);
+        mainToOriginal.push(i);
+      }
+    }
+
+    const bestMain = findNextFocusableIndex(
+      origin,
+      mainRects,
+      'up',
+      mappedCurrent,
+    );
+    if (bestMain >= 0) {
+      return mainToOriginal[bestMain];
+    }
+  }
+
+  return findNextFocusableIndex(origin, candidates, direction, currentIndex);
+}
+
+/**
+ * Рассчитывает плавный пошаговый сдвиг прокрутки внутри длинного текста (например, в мини-окне описания),
+ * чтобы текст прокручивался комфортно по 3–4 строки, а не прыгал сразу в самый конец или начало.
+ */
+export function computeNextScrollStep(
+  currentScrollTop: number,
+  maxScrollTop: number,
+  direction: 'up' | 'down',
+  stepPx = 128,
+): { nextScrollTop: number; didScroll: boolean } {
+  const safeMax = Math.max(0, maxScrollTop);
+  if (safeMax <= 2) {
+    return { nextScrollTop: currentScrollTop, didScroll: false };
+  }
+
+  const clampedCurrent = Math.min(safeMax, Math.max(0, currentScrollTop));
+  const rawNext =
+    direction === 'down'
+      ? Math.min(safeMax, clampedCurrent + stepPx)
+      : Math.max(0, clampedCurrent - stepPx);
+
+  if (Math.abs(rawNext - clampedCurrent) < 2) {
+    return { nextScrollTop: clampedCurrent, didScroll: false };
+  }
+
+  return { nextScrollTop: rawNext, didScroll: true };
 }

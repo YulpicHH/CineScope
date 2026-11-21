@@ -1,7 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BookOpen, Info, Star, X } from 'lucide-react';
 import type { MediaType } from '../../types';
+import { isTvMode } from '../../utils/platform';
+import { computeNextScrollStep } from '../../utils/tvSpatialNav';
 
 interface DescriptionModalProps {
   open: boolean;
@@ -38,25 +40,68 @@ export function DescriptionModal({
   writers = [],
   detailsHref,
 }: DescriptionModalProps) {
+  const scrollBodyRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollBody, setCanScrollBody] = useState(false);
+  const tvMode = isTvMode();
+
   useEffect(() => {
     if (!open) return;
 
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
+    const updateScrollability = () => {
+      const el = scrollBodyRef.current;
+      if (!el) return;
+      setCanScrollBody(el.scrollHeight > el.clientHeight + 8);
+    };
+
+    const rafId = window.requestAnimationFrame(() => {
+      if (scrollBodyRef.current) {
+        scrollBodyRef.current.scrollTop = 0;
+      }
+      updateScrollability();
+    });
+
+    window.addEventListener('resize', updateScrollability);
+
+    // Плавная прокрутка стрелками вверх/вниз на десктопе (в ТВ-режиме этим управляет useTvNavigation)
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         onClose();
+        return;
+      }
+
+      if (tvMode) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        const el = scrollBodyRef.current;
+        if (!el) return;
+        const maxScroll = el.scrollHeight - el.clientHeight;
+        if (maxScroll <= 4) return;
+
+        const dir = event.key === 'ArrowDown' ? 'down' : 'up';
+        const { nextScrollTop, didScroll } = computeNextScrollStep(
+          el.scrollTop,
+          maxScroll,
+          dir,
+          120,
+        );
+        if (didScroll) {
+          event.preventDefault();
+          el.scrollTo({ top: nextScrollTop, behavior: 'smooth' });
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', updateScrollability);
       document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [open, onClose]);
+  }, [open, onClose, tvMode, overview]);
 
   if (!open) return null;
 
@@ -69,7 +114,7 @@ export function DescriptionModal({
 
   return (
     <div
-      className="safe-modal-inset tv-modal-overscan fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/75 backdrop-blur-sm"
+      className="safe-modal-inset tv-modal-overscan fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="description-modal-title"
@@ -80,9 +125,9 @@ export function DescriptionModal({
         }
       }}
     >
-      <div className="safe-modal-panel cinema-scroll relative flex w-full max-w-xl flex-col overflow-y-auto rounded-2xl border border-white/[0.1] bg-[#11151E] text-[#F3F5F9] shadow-2xl">
-        {/* Заголовок мини-окна */}
-        <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] px-6 py-5">
+      <div className="safe-modal-panel animate-modal-enter relative flex w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/[0.1] bg-[#11151E] text-[#F3F5F9] shadow-2xl">
+        {/* Фиксированный заголовок мини-окна */}
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/[0.08] px-6 py-5">
           <div className="min-w-0 space-y-1.5">
             <div className="flex items-center gap-2 text-blue-400">
               <BookOpen className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -137,8 +182,12 @@ export function DescriptionModal({
           </button>
         </div>
 
-        {/* Текст описания и создатели */}
-        <div className="space-y-4 px-6 py-5">
+        {/* Плавно прокручиваемая область с текстом описания и создателями */}
+        <div
+          ref={scrollBodyRef}
+          data-tv-scroll-body="true"
+          className="cinema-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5"
+        >
           <p
             data-testid="description-modal-text"
             className="whitespace-pre-line text-sm leading-relaxed text-slate-200 sm:text-base sm:leading-7"
@@ -164,29 +213,35 @@ export function DescriptionModal({
           ) : null}
         </div>
 
-        {/* Нижняя панель действий */}
-        <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-white/[0.08] px-6 py-4">
-          {detailsHref ? (
-            <Link
-              to={detailsHref}
-              onClick={onClose}
-              className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.08] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/[0.15] focus-visible:outline-2 focus-visible:outline-blue-400"
-            >
-              <Info className="h-4 w-4" aria-hidden="true" />
-              Открыть страницу
-            </Link>
-          ) : null}
+        {/* Фиксированная нижняя панель действий */}
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-t border-white/[0.08] px-6 py-4">
+          <span className="text-xs text-slate-400">
+            {canScrollBody ? '▲ / ▼ — плавная прокрутка текста' : ''}
+          </span>
 
-          <button
-            type="button"
-            onClick={onClose}
-            data-testid="close-description-modal-button"
-            data-tv-autofocus="true"
-            data-tv-modal-close="true"
-            className="inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-blue-400"
-          >
-            Закрыть
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2.5">
+            {detailsHref ? (
+              <Link
+                to={detailsHref}
+                onClick={onClose}
+                className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.08] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/[0.15] focus-visible:outline-2 focus-visible:outline-blue-400"
+              >
+                <Info className="h-4 w-4" aria-hidden="true" />
+                Открыть страницу
+              </Link>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={onClose}
+              data-testid="close-description-modal-button"
+              data-tv-autofocus="true"
+              data-tv-modal-close="true"
+              className="inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-blue-400"
+            >
+              Закрыть
+            </button>
+          </div>
         </div>
       </div>
     </div>

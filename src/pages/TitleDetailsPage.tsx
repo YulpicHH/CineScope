@@ -176,6 +176,7 @@ export function TitleDetailsPage() {
       <div>
         <Link
           to={catalogBackHref}
+          data-tv-autofocus="true"
           className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -325,7 +326,6 @@ export function TitleDetailsPage() {
                       <button
                         type="button"
                         data-testid="watch-kinokino-link"
-                        data-tv-autofocus="true"
                         onClick={() => {
                           setWatchWindowError(null);
                           markWatching(item);
@@ -366,7 +366,6 @@ export function TitleDetailsPage() {
                     <button
                       type="button"
                       data-testid="watch-kinokino-link"
-                      data-tv-autofocus="true"
                       onClick={() => {
                         setWatchWindowError(null);
                         markWatching(item);
@@ -394,7 +393,6 @@ export function TitleDetailsPage() {
                       target="_blank"
                       rel="noopener noreferrer"
                       data-testid="watch-kinokino-link"
-                      data-tv-autofocus="true"
                       onClick={() => {
                         markWatching(item);
                       }}
@@ -414,7 +412,6 @@ export function TitleDetailsPage() {
                   <button
                     type="button"
                     data-testid="watch-missing-key-button"
-                    data-tv-autofocus="true"
                     onClick={() => setMissingKeyNotice(true)}
                     className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:from-blue-500 hover:to-violet-500 hover:shadow-blue-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090B10]"
                   >
@@ -427,12 +424,6 @@ export function TitleDetailsPage() {
                   type="button"
                   onClick={() => toggleWatchlist(item)}
                   aria-pressed={isWatchlist}
-                  data-tv-autofocus={
-                    watchState.status !== 'matched' &&
-                    watchState.status !== 'missing_key'
-                      ? 'true'
-                      : undefined
-                  }
                   className={`inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
                     isWatchlist
                       ? 'bg-blue-600 text-white hover:bg-blue-700'

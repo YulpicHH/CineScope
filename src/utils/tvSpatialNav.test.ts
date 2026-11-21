@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  computeNextScrollStep,
   findNextFocusableIndex,
   mapKeyToTvAction,
+  selectSpatialCandidateIndex,
   shouldAcceptTvKeyEvent,
   type FocusRect,
 } from './tvSpatialNav';
@@ -420,4 +422,97 @@ test('catalogSessionCache preserves loaded pages, scrollY, and focused movie car
     null,
   );
   assert.equal(getLastCatalogSearch(), '');
+});
+
+test('selectSpatialCandidateIndex stays inside <main> when moving Up through movie rows and only enters <header> from the top of <main>', () => {
+  const candidates: FocusRect[] = [
+    // Header (anchored at document top y=20..56)
+    rect(48, 20, 110, 36), // 0: CineScope (header)
+    rect(320, 20, 88, 36), // 1: Главная (header)
+    rect(634, 20, 92, 36), // 2: История (header)
+    // Main: Row 1 of movies (scrolled above viewport in document space: y=900..1140)
+    rect(48, 900, 160, 240), // 3: Row 1, col 0
+    rect(228, 900, 160, 240), // 4: Row 1, col 1
+    // Main: Row 2 of movies (y=1180..1420)
+    rect(48, 1180, 160, 240), // 5: Row 2, col 0
+    rect(228, 1180, 160, 240), // 6: Row 2, col 1
+  ];
+  const inMain = [false, false, false, true, true, true, true];
+
+  // Из ряда 2 вверх попадаем строго в ряд 1 (индекс 3), а не в шапку
+  assert.equal(
+    selectSpatialCandidateIndex(candidates[5], candidates, 'up', 5, true, inMain),
+    3,
+  );
+  assert.equal(
+    selectSpatialCandidateIndex(candidates[6], candidates, 'up', 6, true, inMain),
+    4,
+  );
+
+  // Только когда выше в <main> ничего не осталось (ряд 1), движение вверх переходит в шапку
+  const headerIdx = selectSpatialCandidateIndex(
+    candidates[3],
+    candidates,
+    'up',
+    3,
+    true,
+    inMain,
+  );
+  assert.equal(inMain[headerIdx], false);
+});
+
+test('TitleDetailsPage vertical navigation moves К каталогу -> Открыть описание -> action row and Посмотреть позже -> Up -> Открыть описание (never История)', () => {
+  const candidates: FocusRect[] = [
+    rect(550, 20, 92, 36), // 0: История (header)
+    rect(40, 92, 110, 28), // 1: К каталогу (main top)
+    rect(300, 330, 155, 40), // 2: Открыть описание (main)
+    rect(300, 420, 130, 44), // 3: Смотреть (main)
+    rect(442, 420, 185, 44), // 4: Посмотреть позже (main — прямо под «История» по X!)
+    rect(300, 476, 150, 44), // 5: В избранное (main, 2-я строка кнопок)
+  ];
+  const inMain = [false, true, true, true, true, true];
+
+  // После открытия фильма фокус на «К каталогу» -> нажатие Вниз ведёт на «Открыть описание» (индекс 2)
+  assert.equal(
+    selectSpatialCandidateIndex(candidates[1], candidates, 'down', 1, true, inMain),
+    2,
+  );
+  // С «Открыть описание» Вниз -> «Смотреть» (индекс 3)
+  assert.equal(
+    selectSpatialCandidateIndex(candidates[2], candidates, 'down', 2, true, inMain),
+    3,
+  );
+  // С «Посмотреть позже» (индекс 4) Вверх -> «Открыть описание» (индекс 2), а НЕ «История» (индекс 0)
+  assert.equal(
+    selectSpatialCandidateIndex(candidates[4], candidates, 'up', 4, true, inMain),
+    2,
+  );
+  // С «Открыть описание» Вверх -> «К каталогу» (индекс 1)
+  assert.equal(
+    selectSpatialCandidateIndex(candidates[2], candidates, 'up', 2, true, inMain),
+    1,
+  );
+});
+
+test('computeNextScrollStep scrolls long movie descriptions gradually in small steps instead of jumping to the end', () => {
+  // Длинное описание с maxScrollTop = 420px
+  const s1 = computeNextScrollStep(0, 420, 'down', 120);
+  assert.deepEqual(s1, { nextScrollTop: 120, didScroll: true });
+
+  const s2 = computeNextScrollStep(s1.nextScrollTop, 420, 'down', 120);
+  assert.deepEqual(s2, { nextScrollTop: 240, didScroll: true });
+
+  const s3 = computeNextScrollStep(s2.nextScrollTop, 420, 'down', 120);
+  assert.deepEqual(s3, { nextScrollTop: 360, didScroll: true });
+
+  const s4 = computeNextScrollStep(s3.nextScrollTop, 420, 'down', 120);
+  assert.deepEqual(s4, { nextScrollTop: 420, didScroll: true });
+
+  // В самом низу дальнейшее нажатие Вниз возвращает didScroll: false
+  const sEnd = computeNextScrollStep(420, 420, 'down', 120);
+  assert.deepEqual(sEnd, { nextScrollTop: 420, didScroll: false });
+
+  // Обратно вверх — так же плавно по шагам
+  const up1 = computeNextScrollStep(420, 420, 'up', 120);
+  assert.deepEqual(up1, { nextScrollTop: 300, didScroll: true });
 });

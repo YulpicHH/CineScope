@@ -6,6 +6,7 @@ import {
   RotateCcw,
   Search,
   SlidersHorizontal,
+  User as UserIcon,
   X,
 } from 'lucide-react';
 import type {
@@ -24,6 +25,7 @@ interface CatalogFilterBarProps {
   genres: Genre[];
   hiddenWatchedCount: number;
   watchedTotalCount: number;
+  totalResults?: number;
   highlightMoods?: boolean;
   isPickingRandom?: boolean;
   onChange: (next: CatalogFilters) => void;
@@ -60,6 +62,7 @@ export function CatalogFilterBar({
   genres,
   hiddenWatchedCount,
   watchedTotalCount,
+  totalResults,
   highlightMoods = false,
   isPickingRandom = false,
   onChange,
@@ -103,8 +106,13 @@ export function CatalogFilterBar({
   };
 
   const isAnimeScope = filters.mediaType === 'anime';
+  const hasActiveActor = Boolean(
+    (filters.personId && filters.personId > 0) ||
+      (filters.personName && filters.personName.trim().length > 0),
+  );
 
   const hasActiveFilters =
+    hasActiveActor ||
     filters.query.trim().length > 0 ||
     filters.moods.length > 0 ||
     filters.genreIds.length > 0 ||
@@ -121,6 +129,43 @@ export function CatalogFilterBar({
       aria-label="Фильтры, настроение и поиск каталога"
       className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-4 dark:border-white/[0.08] dark:bg-[#11151E] sm:p-5"
     >
+      {hasActiveActor ? (
+        <div
+          data-testid="active-actor-banner"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-500/25 bg-blue-50/80 px-3.5 py-2.5 dark:border-blue-400/25 dark:bg-blue-500/10"
+        >
+          <div className="flex min-w-0 items-center gap-2.5 text-sm">
+            <UserIcon
+              className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400"
+              aria-hidden="true"
+            />
+            <span className="truncate font-semibold text-slate-900 dark:text-white">
+              Фильмография: {filters.personName?.trim() || 'Актёр'}
+            </span>
+            {typeof totalResults === 'number' && totalResults > 0 ? (
+              <span className="whitespace-nowrap text-xs tabular-nums text-slate-600 dark:text-slate-300">
+                · {totalResults}
+              </span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            data-testid="clear-actor-filter-button"
+            onClick={() =>
+              onChange({
+                ...filters,
+                personId: null,
+                personName: '',
+              })
+            }
+            className="inline-flex min-h-[34px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-500/30 bg-white px-3 py-1 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-blue-400/30 dark:bg-[#0B0E15] dark:text-blue-300 dark:hover:bg-blue-500/20"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Показать весь каталог</span>
+          </button>
+        </div>
+      ) : null}
+
       {/* Первая строка: Формат (Все / Фильмы / Сериалы), Поиск, Случайный выбор */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div
@@ -164,9 +209,11 @@ export function CatalogFilterBar({
             value={filters.query}
             onChange={(e) => onChange({ ...filters, query: e.target.value })}
             placeholder={
-              isAnimeScope
-                ? 'Название аниме, режиссёр или сэйю...'
-                : 'Название фильма или сериала, актёр, режиссёр...'
+              hasActiveActor
+                ? `Поиск среди работ (${filters.personName?.trim() || 'актёр'})...`
+                : isAnimeScope
+                  ? 'Название аниме, режиссёр или сэйю...'
+                  : 'Название фильма или сериала, актёр, режиссёр...'
             }
             className={`w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 text-base text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100 dark:placeholder:text-slate-500 ${
               tvMode && !filters.query ? 'pr-24' : 'pr-9'

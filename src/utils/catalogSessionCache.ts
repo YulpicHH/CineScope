@@ -7,17 +7,20 @@ export interface CatalogViewSnapshot {
   items: MediaItem[];
   page: number;
   totalPages: number;
+  totalResults?: number;
   scrollY: number;
   focusedItemKey: string | null;
   savedAt: number;
 }
 
 const DEFAULT_SNAPSHOT_TTL_MS = 30 * 60 * 1000;
+const MAX_CATALOG_SNAPSHOTS = 8;
 
-let latestSnapshot: CatalogViewSnapshot | null = null;
+const snapshotMap = new Map<string, CatalogViewSnapshot>();
+let latestSnapshotKey: string | null = null;
 
 /**
- * Формирует стабильный ключ выборки каталога (фильтры + режим данных + версия ключей),
+ * Формирует стабильный ключ выборки каталога (фильтры + актёр + режим данных + версия ключей),
  * чтобы при возврате со страницы фильма мгновенно восстановить точную позицию и загруженные страницы.
  */
 export function buildCatalogCacheKey(
@@ -30,6 +33,8 @@ export function buildCatalogCacheKey(
   return JSON.stringify({
     mediaType: filters.mediaType,
     query: filters.query.trim().toLowerCase(),
+    personId: filters.personId ?? null,
+    personName: (filters.personName ?? '').trim().toLowerCase(),
     moods,
     genres,
     country: filters.country.toUpperCase(),
@@ -44,7 +49,7 @@ export function buildCatalogCacheKey(
 export function saveCatalogSnapshot(
   snapshot: Omit<CatalogViewSnapshot, 'savedAt'> & { savedAt?: number },
 ): void {
-  latestSnapshot = {
+  const stored: CatalogViewSnapshot = {
     ...snapshot,
     filters: {
       ...snapshot.filters,
@@ -55,6 +60,16 @@ export function saveCatalogSnapshot(
     scrollY: Math.max(0, Math.round(snapshot.scrollY)),
     savedAt: snapshot.savedAt ?? Date.now(),
   };
+
+  snapshotMap.delete(stored.cacheKey);
+  snapshotMap.set(stored.cacheKey, stored);
+  latestSnapshotKey = stored.cacheKey;
+
+  while (snapshotMap.size > MAX_CATALOG_SNAPSHOTS) {
+    const oldestKey = snapshotMap.keys().next().value;
+    if (oldestKey === undefined) break;
+    snapshotMap.delete(oldestKey);
+  }
 }
 
 export function updateCatalogSnapshotPosition(
@@ -63,14 +78,18 @@ export function updateCatalogSnapshotPosition(
   focusedItemKey: string | null,
   search?: string,
 ): void {
-  if (!latestSnapshot || latestSnapshot.cacheKey !== cacheKey) return;
-  latestSnapshot = {
-    ...latestSnapshot,
+  const existing = snapshotMap.get(cacheKey);
+  if (!existing) return;
+  const updated: CatalogViewSnapshot = {
+    ...existing,
     scrollY: Math.max(0, Math.round(scrollY)),
-    focusedItemKey: focusedItemKey ?? latestSnapshot.focusedItemKey,
-    search: search !== undefined ? search : latestSnapshot.search,
+    focusedItemKey: focusedItemKey ?? existing.focusedItemKey,
+    search: search !== undefined ? search : existing.search,
     savedAt: Date.now(),
   };
+  snapshotMap.delete(cacheKey);
+  snapshotMap.set(cacheKey, updated);
+  latestSnapshotKey = cacheKey;
 }
 
 export function getMatchingCatalogSnapshot(
@@ -78,27 +97,28 @@ export function getMatchingCatalogSnapshot(
   now = Date.now(),
   ttlMs = DEFAULT_SNAPSHOT_TTL_MS,
 ): CatalogViewSnapshot | null {
-  if (!latestSnapshot) return null;
-  if (latestSnapshot.cacheKey !== cacheKey) return null;
-  if (now - latestSnapshot.savedAt > ttlMs) {
-    latestSnapshot = null;
+  const found = snapshotMap.get(cacheKey);
+  if (!found) return null;
+  if (now - found.savedAt > ttlMs) {
+    snapshotMap.delete(cacheKey);
+    if (latestSnapshotKey === cacheKey) {
+      latestSnapshotKey = null;
+    }
     return null;
   }
-  return latestSnapshot;
+  return found;
 }
 
 export function getLastCatalogSearch(
   now = Date.now(),
   ttlMs = DEFAULT_SNAPSHOT_TTL_MS,
 ): string {
-  if (!latestSnapshot) return '';
-  if (now - latestSnapshot.savedAt > ttlMs) {
-    latestSnapshot = null;
-    return '';
-  }
-  return latestSnapshot.search;
+  if (!latestSnapshotKey) return '';
+  const latest = getMatchingCatalogSnapshot(latestSnapshotKey, now, ttlMs);
+  return latest?.search ?? '';
 }
 
 export function clearCatalogSnapshot(): void {
-  latestSnapshot = null;
+  snapshotMap.clear();
+  latestSnapshotKey = null;
 }

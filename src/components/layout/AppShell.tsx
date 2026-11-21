@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useAppMode } from '../../hooks/useAppMode';
+import { useDesktopBackNavigation } from '../../hooks/useDesktopBackNavigation';
 import { useTvNavigation } from '../../hooks/useTvNavigation';
 import { ApiSettingsModal } from '../settings/ApiSettingsModal';
 import { Toast } from '../ui/Toast';
@@ -10,6 +11,7 @@ import { MobileNav } from './MobileNav';
 export function AppShell({ children }: { children: ReactNode }) {
   const { isDemoMode, hasApiKey, openSettingsModal } = useAppMode();
   useTvNavigation();
+  useDesktopBackNavigation();
 
   return (
     <div className="flex min-h-dvh flex-col overflow-x-clip bg-[#F6F7FA] text-slate-900 dark:bg-[#090B10] dark:text-[#F3F5F9]">

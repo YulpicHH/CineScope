@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useNavigationType,
+  useParams,
+} from 'react-router-dom';
 import {
   ArrowLeft,
   BookOpen,
@@ -37,6 +43,13 @@ import {
 import { buildProfileImageProps } from '../utils/imageUrl';
 import { getLastCatalogSearch } from '../utils/catalogSessionCache';
 import {
+  getRouteScroll,
+  getTitleDetailsCache,
+  saveCarouselScroll,
+  saveRouteScroll,
+  saveTitleDetailsCache,
+} from '../utils/routeViewCache';
+import {
   isAndroidTauri,
   isDesktopTauriRuntime,
   isTvMode,
@@ -48,6 +61,9 @@ type WatchResolutionState =
   | KinopoiskWatchResolution;
 
 export function TitleDetailsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const navigationType = useNavigationType();
   const { mediaType: rawType, id: rawId } = useParams<{
     mediaType: string;
     id: string;
@@ -65,8 +81,14 @@ export function TitleDetailsPage() {
     rateTitle,
   } = useLibrary();
 
-  const [details, setDetails] = useState<TitleDetailsData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const routeKey = `${location.pathname}${location.search}`;
+  const detailsCacheKey = `${mediaType}:${id}:${isDemoMode ? 'demo' : 'live'}:${keysVersion}`;
+  const cachedInitialDetails = getTitleDetailsCache(detailsCacheKey);
+
+  const [details, setDetails] = useState<TitleDetailsData | null>(
+    () => cachedInitialDetails,
+  );
+  const [loading, setLoading] = useState(() => !cachedInitialDetails);
   const [error, setError] = useState<string | null>(null);
   const [watchState, setWatchState] = useState<WatchResolutionState>({
     status: 'idle',
@@ -76,18 +98,41 @@ export function TitleDetailsPage() {
   const [watchWindowError, setWatchWindowError] = useState<string | null>(null);
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
 
+  const latestScrollYRef = useRef(0);
+  const isLeavingRef = useRef(false);
+  const castScrollRef = useRef<HTMLDivElement | null>(null);
+  const latestRouteKeyRef = useRef(routeKey);
+  latestRouteKeyRef.current = routeKey;
+
+  const canGoBackInHistory = (() => {
+    if (typeof window === 'undefined') return false;
+    const state = window.history.state as { idx?: number } | null;
+    return typeof state?.idx === 'number' ? state.idx > 0 : false;
+  })();
+
   const loadDetails = useCallback(async () => {
     if (!Number.isFinite(id) || id <= 0) {
       setError('Некорректный идентификатор тайтла.');
       setLoading(false);
       return;
     }
+
+    const cached = getTitleDetailsCache(detailsCacheKey);
+    if (cached) {
+      setDetails(cached);
+      setLoading(false);
+      setError(null);
+      setIsDescriptionOpen(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setIsDescriptionOpen(false);
     setWatchState({ status: 'idle' });
     try {
       const data = await getTitleDetails(mediaType, id, isDemoMode);
+      saveTitleDetailsCache(detailsCacheKey, data);
       setDetails(data);
     } catch (err: unknown) {
       setError(
@@ -98,12 +143,77 @@ export function TitleDetailsPage() {
     } finally {
       setLoading(false);
     }
-  }, [mediaType, id, isDemoMode, keysVersion]);
+  }, [mediaType, id, isDemoMode, keysVersion, detailsCacheKey]);
 
   useEffect(() => {
+    isLeavingRef.current = false;
     void loadDetails();
-    window.scrollTo({ top: 0, behavior: 'auto' });
   }, [loadDetails]);
+
+  // Отслеживаем прокрутку страницы фильма и сохраняем её при уходе (например, при переходе к актёру или похожему фильму)
+  useEffect(() => {
+    const currentRouteKey = routeKey;
+    const handleScroll = () => {
+      if (isLeavingRef.current) return;
+      latestScrollYRef.current = window.scrollY;
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      saveRouteScroll(currentRouteKey, latestScrollYRef.current);
+    };
+  }, [routeKey]);
+
+  // Восстанавливаем сохранённую позицию при возврате «Назад» (POP), а при новом открытии фильма — начинаем сверху
+  useLayoutEffect(() => {
+    if (loading) return;
+    const saved = navigationType === 'POP' ? getRouteScroll(routeKey) : null;
+    if (saved && saved.scrollY > 0) {
+      let userInteracted = false;
+      const cancelSettle = () => {
+        userInteracted = true;
+      };
+      window.addEventListener('wheel', cancelSettle, { passive: true, once: true });
+      window.addEventListener('touchstart', cancelSettle, { passive: true, once: true });
+      window.addEventListener('pointerdown', cancelSettle, { passive: true, once: true });
+
+      const restore = () => {
+        if (userInteracted) return;
+        window.scrollTo(0, saved.scrollY);
+        latestScrollYRef.current = saved.scrollY;
+        const savedCastLeft = saved.carouselScrollLeft.cast;
+        if (castScrollRef.current && typeof savedCastLeft === 'number' && savedCastLeft > 0) {
+          castScrollRef.current.scrollLeft = savedCastLeft;
+        }
+      };
+
+      restore();
+      const rafId = window.requestAnimationFrame(restore);
+      const settleTimer = window.setTimeout(restore, 90);
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        window.clearTimeout(settleTimer);
+        window.removeEventListener('wheel', cancelSettle);
+        window.removeEventListener('touchstart', cancelSettle);
+        window.removeEventListener('pointerdown', cancelSettle);
+      };
+    }
+
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    latestScrollYRef.current = 0;
+  }, [loading, routeKey, navigationType]);
+
+  const persistCurrentPositionBeforeLeave = useCallback(() => {
+    isLeavingRef.current = true;
+    latestScrollYRef.current = window.scrollY;
+    saveRouteScroll(
+      latestRouteKeyRef.current,
+      window.scrollY,
+      castScrollRef.current
+        ? { cast: castScrollRef.current.scrollLeft }
+        : undefined,
+    );
+  }, []);
 
   useEffect(() => {
     if (!details) return;
@@ -134,6 +244,32 @@ export function TitleDetailsPage() {
   }, [details, watchRetryCount, keysVersion]);
 
   const catalogBackHref = `/catalog${getLastCatalogSearch()}`;
+  const savedRouteSnapshot =
+    navigationType === 'POP' ? getRouteScroll(routeKey) : null;
+
+  const renderBackControl = (fallbackLabel: string) =>
+    canGoBackInHistory ? (
+      <button
+        type="button"
+        data-tv-autofocus="true"
+        data-testid="title-back-button"
+        onClick={() => navigate(-1)}
+        className="inline-flex min-h-[36px] items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-white"
+      >
+        <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+        Назад
+      </button>
+    ) : (
+      <Link
+        to={catalogBackHref}
+        data-tv-autofocus="true"
+        data-testid="title-back-button"
+        className="inline-flex min-h-[36px] items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-white"
+      >
+        <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+        {fallbackLabel}
+      </Link>
+    );
 
   if (loading) {
     return <DetailsSkeleton />;
@@ -142,13 +278,7 @@ export function TitleDetailsPage() {
   if (error || !details) {
     return (
       <div className="space-y-4">
-        <Link
-          to={catalogBackHref}
-          className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
-        >
-          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          Назад в каталог
-        </Link>
+        {renderBackControl('Назад в каталог')}
         <ErrorState
           message={error ?? 'Тайтл не найден.'}
           onRetry={() => void loadDetails()}
@@ -173,16 +303,7 @@ export function TitleDetailsPage() {
 
   return (
     <div className="space-y-10">
-      <div>
-        <Link
-          to={catalogBackHref}
-          data-tv-autofocus="true"
-          className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
-        >
-          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          К каталогу
-        </Link>
-      </div>
+      <div>{renderBackControl('К каталогу')}</div>
 
       {/* Верхний блок с backdrop и основным описанием */}
       <section className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-[#090B10] dark:border-white/[0.08]">
@@ -589,21 +710,37 @@ export function TitleDetailsPage() {
               В главных ролях
             </h2>
             <span className="text-xs text-slate-500 dark:text-slate-400">
-              Выберите актёра, чтобы найти фильмы с ним
+              Нажмите на актёра, чтобы открыть все фильмы и сериалы с ним
             </span>
           </div>
-          <div className="cinema-scroll -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
+          <div
+            ref={castScrollRef}
+            onScroll={(event) => {
+              saveCarouselScroll(
+                latestRouteKeyRef.current,
+                'cast',
+                event.currentTarget.scrollLeft,
+              );
+            }}
+            className="cinema-scroll -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0"
+          >
             {cast.map((person) => {
               const photoProps = buildProfileImageProps(person.profilePath);
+              const actorCatalogHref =
+                person.id > 0 && !item.isDemoData
+                  ? `/catalog?person=${person.id}&personName=${encodeURIComponent(person.name)}`
+                  : `/catalog?personName=${encodeURIComponent(person.name)}`;
               return (
                 <Link
                   key={`${person.id}-${person.name}`}
-                  to={`/catalog?q=${encodeURIComponent(person.name)}`}
+                  to={actorCatalogHref}
+                  tabIndex={0}
+                  onClick={persistCurrentPositionBeforeLeave}
                   data-testid="cast-member-card"
-                  aria-label={`Найти фильмы с участием ${person.name}`}
-                  className="group block w-32 shrink-0 space-y-2 rounded-xl p-1 text-left transition-colors focus-visible:outline-2 focus-visible:outline-blue-500"
+                  aria-label={`Открыть все фильмы и сериалы с участием ${person.name}`}
+                  className="group block w-32 shrink-0 cursor-pointer space-y-2 rounded-xl p-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#F6F7FA] dark:focus-visible:ring-offset-[#090B10]"
                 >
-                  <div className="aspect-[3/4] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-colors group-hover:border-blue-500/60 dark:border-white/[0.08] dark:bg-[#11151E] dark:group-hover:border-blue-400/50">
+                  <div className="aspect-[3/4] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-colors group-hover:border-blue-500/70 group-focus-visible:border-blue-500 dark:border-white/[0.08] dark:bg-[#11151E] dark:group-hover:border-blue-400/60 dark:group-focus-visible:border-blue-400">
                     {photoProps ? (
                       <img
                         src={photoProps.src}
@@ -613,7 +750,7 @@ export function TitleDetailsPage() {
                         referrerPolicy="no-referrer"
                         loading="lazy"
                         decoding="async"
-                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03] group-focus-visible:scale-[1.03]"
                       />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-slate-400 dark:text-slate-600">
@@ -622,7 +759,7 @@ export function TitleDetailsPage() {
                     )}
                   </div>
                   <div>
-                    <p className="line-clamp-1 text-sm font-semibold text-slate-900 transition-colors group-hover:text-blue-600 dark:text-slate-100 dark:group-hover:text-blue-400">
+                    <p className="line-clamp-1 text-sm font-semibold text-slate-900 transition-colors group-hover:text-blue-600 group-focus-visible:text-blue-600 dark:text-slate-100 dark:group-hover:text-blue-400 dark:group-focus-visible:text-blue-400">
                       {person.name}
                     </p>
                     {person.character ? (
@@ -671,7 +808,16 @@ export function TitleDetailsPage() {
 
       {/* Похожие тайтлы */}
       {similar.length > 0 ? (
-        <MediaCarousel title="Похожие тайтлы" items={similar} />
+        <MediaCarousel
+          title="Похожие тайтлы"
+          items={similar}
+          carouselId="similar"
+          initialScrollLeft={savedRouteSnapshot?.carouselScrollLeft.similar}
+          onScrollLeftChange={(cid, left) =>
+            saveCarouselScroll(latestRouteKeyRef.current, cid, left)
+          }
+          onItemSelect={persistCurrentPositionBeforeLeave}
+        />
       ) : null}
 
       <DescriptionModal

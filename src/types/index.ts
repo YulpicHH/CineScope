@@ -146,6 +146,8 @@ export interface CatalogFilters {
   minRating: number;
   sortBy: SortOption;
   hideWatched: boolean;
+  personId?: number | null;
+  personName?: string;
 }
 
 export interface HistoryStats {

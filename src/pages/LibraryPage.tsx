@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Bookmark,
@@ -15,6 +15,10 @@ import { PosterArtwork } from '../components/ui/PosterArtwork';
 import { EmptyState } from '../components/ui/StateViews';
 import { useLibrary } from '../hooks/useLibrary';
 import type { Genre, LibraryItem, MediaItem } from '../types';
+import {
+  getLibraryViewState,
+  saveLibraryViewState,
+} from '../utils/routeViewCache';
 
 type LibraryTab = 'watching' | 'watchlist' | 'watched' | 'favorites';
 
@@ -76,12 +80,100 @@ export function LibraryPage() {
     rateTitle,
   } = useLibrary();
 
-  const [activeTab, setActiveTab] = useState<LibraryTab>(() =>
-    watchingItems.length > 0 ? 'watching' : 'watchlist',
+  const savedViewRef = useRef(getLibraryViewState());
+  const [activeTab, setActiveTab] = useState<LibraryTab>(
+    () =>
+      savedViewRef.current?.activeTab ??
+      (watchingItems.length > 0 ? 'watching' : 'watchlist'),
   );
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedGenreId, setSelectedGenreId] = useState<number | ''>('');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [searchQuery, setSearchQuery] = useState(
+    () => savedViewRef.current?.searchQuery ?? '',
+  );
+  const [selectedGenreId, setSelectedGenreId] = useState<number | ''>(
+    () => savedViewRef.current?.selectedGenreId ?? '',
+  );
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(
+    () => savedViewRef.current?.viewMode ?? 'grid',
+  );
+
+  const latestScrollYRef = useRef<number>(savedViewRef.current?.scrollY ?? 0);
+  const isLeavingRef = useRef(false);
+  const latestStateRef = useRef({
+    activeTab,
+    searchQuery,
+    selectedGenreId,
+    viewMode,
+  });
+  latestStateRef.current = {
+    activeTab,
+    searchQuery,
+    selectedGenreId,
+    viewMode,
+  };
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (isLeavingRef.current) return;
+      latestScrollYRef.current = window.scrollY;
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      saveLibraryViewState({
+        ...latestStateRef.current,
+        scrollY: latestScrollYRef.current,
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    saveLibraryViewState({
+      activeTab,
+      searchQuery,
+      selectedGenreId,
+      viewMode,
+      scrollY: latestScrollYRef.current,
+    });
+  }, [activeTab, searchQuery, selectedGenreId, viewMode]);
+
+  useLayoutEffect(() => {
+    const targetY = savedViewRef.current?.scrollY ?? 0;
+    if (targetY <= 0) return;
+
+    let userInteracted = false;
+    const cancelSettle = () => {
+      userInteracted = true;
+    };
+    window.addEventListener('wheel', cancelSettle, { passive: true, once: true });
+    window.addEventListener('touchstart', cancelSettle, { passive: true, once: true });
+    window.addEventListener('pointerdown', cancelSettle, { passive: true, once: true });
+
+    const restore = () => {
+      if (userInteracted) return;
+      window.scrollTo(0, targetY);
+      latestScrollYRef.current = targetY;
+    };
+
+    restore();
+    const rafId = window.requestAnimationFrame(restore);
+    const settleTimer = window.setTimeout(restore, 90);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(settleTimer);
+      window.removeEventListener('wheel', cancelSettle);
+      window.removeEventListener('touchstart', cancelSettle);
+      window.removeEventListener('pointerdown', cancelSettle);
+    };
+  }, []);
+
+  const persistBeforeLeave = useCallback(() => {
+    isLeavingRef.current = true;
+    latestScrollYRef.current = window.scrollY;
+    saveLibraryViewState({
+      ...latestStateRef.current,
+      scrollY: window.scrollY,
+    });
+  }, []);
 
   const currentItems = useMemo(() => {
     if (activeTab === 'watching') return watchingItems;
@@ -280,6 +372,7 @@ export function LibraryPage() {
           items={filteredItems.map(libraryItemToMediaItem)}
           onRemove={activeTab === 'watching' ? removeFromWatching : undefined}
           removeLabel="Удалить из «В процессе»"
+          onItemSelect={persistBeforeLeave}
         />
       ) : (
         <div className="divide-y divide-slate-200 overflow-hidden rounded-2xl border border-slate-200 bg-white dark:divide-white/[0.06] dark:border-white/[0.08] dark:bg-[#11151E]">
@@ -293,6 +386,7 @@ export function LibraryPage() {
                 <div className="flex items-center gap-4 min-w-0">
                   <Link
                     to={`/title/${entry.mediaType}/${entry.id}`}
+                    onClick={persistBeforeLeave}
                     className="h-20 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 dark:border-white/10"
                   >
                     <PosterArtwork
@@ -306,6 +400,7 @@ export function LibraryPage() {
                   <div className="min-w-0 space-y-1">
                     <Link
                       to={`/title/${entry.mediaType}/${entry.id}`}
+                      onClick={persistBeforeLeave}
                       className="font-display block truncate text-base font-semibold text-slate-950 hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
                     >
                       {entry.title}

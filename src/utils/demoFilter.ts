@@ -13,12 +13,23 @@ export function filterDemoCatalog(
   allTitles: DemoTitleExtended[] = DEMO_TITLES,
 ): MediaItem[] {
   const normalizedQuery = filters.query.trim().toLowerCase();
+  const normalizedPerson = (filters.personName ?? '').trim().toLowerCase();
 
   const matching = allTitles
     .filter((entry) => {
       if (filters.mediaType === 'all') return true;
       if (filters.mediaType === 'anime') return isAnimeItem(entry.item);
       return entry.item.mediaType === filters.mediaType;
+    })
+    .filter((entry) => {
+      if (!normalizedPerson) return true;
+      const inCast = entry.cast.some((c) =>
+        c.name.toLowerCase().includes(normalizedPerson),
+      );
+      const inDirectors = entry.directors.some((d) =>
+        d.toLowerCase().includes(normalizedPerson),
+      );
+      return inCast || inDirectors;
     })
     .filter((entry) => {
       if (!normalizedQuery) return true;

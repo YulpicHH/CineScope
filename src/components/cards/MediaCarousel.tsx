@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { MediaItem } from '../../types';
@@ -12,6 +12,10 @@ interface MediaCarouselProps {
   catalogHref?: string;
   catalogLabel?: string;
   loading?: boolean;
+  carouselId?: string;
+  initialScrollLeft?: number;
+  onScrollLeftChange?: (carouselId: string, scrollLeft: number) => void;
+  onItemSelect?: (item: MediaItem) => void;
 }
 
 export function MediaCarousel({
@@ -21,8 +25,28 @@ export function MediaCarousel({
   catalogHref,
   catalogLabel = 'В каталог',
   loading = false,
+  carouselId,
+  initialScrollLeft,
+  onScrollLeftChange,
+  onItemSelect,
 }: MediaCarouselProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const restoredRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (loading || restoredRef.current) return;
+    if (
+      typeof initialScrollLeft !== 'number' ||
+      initialScrollLeft <= 0 ||
+      items.length === 0
+    ) {
+      return;
+    }
+    const el = scrollRef.current;
+    if (!el) return;
+    restoredRef.current = true;
+    el.scrollLeft = initialScrollLeft;
+  }, [loading, initialScrollLeft, items.length]);
 
   const scrollByAmount = (direction: 'left' | 'right') => {
     const el = scrollRef.current;
@@ -83,10 +107,21 @@ export function MediaCarousel({
       ) : (
         <div
           ref={scrollRef}
+          data-carousel-id={carouselId}
+          onScroll={(event) => {
+            if (carouselId && onScrollLeftChange) {
+              onScrollLeftChange(carouselId, event.currentTarget.scrollLeft);
+            }
+          }}
           className="cinema-scroll -mx-4 flex gap-4 overflow-x-auto px-4 pb-3 sm:mx-0 sm:px-0"
         >
           {items.map((item) => (
-            <MediaCard key={`${item.mediaType}:${item.id}`} item={item} compact />
+            <MediaCard
+              key={`${item.mediaType}:${item.id}`}
+              item={item}
+              compact
+              onSelect={onItemSelect}
+            />
           ))}
         </div>
       )}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Clock, Star, Trash2 } from 'lucide-react';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
@@ -7,10 +7,64 @@ import { EmptyState } from '../components/ui/StateViews';
 import { useHistory } from '../hooks/useHistory';
 import type { LibraryItem } from '../types';
 import { formatRussianDate } from '../utils/formatters';
+import { getRouteScroll, saveRouteScroll } from '../utils/routeViewCache';
+
+const HISTORY_ROUTE_KEY = '/history';
 
 export function HistoryPage() {
   const { timeline, stats, removeHistoryEntry } = useHistory();
   const [pendingDelete, setPendingDelete] = useState<LibraryItem | null>(null);
+  const initialScrollRef = useRef(getRouteScroll(HISTORY_ROUTE_KEY)?.scrollY ?? 0);
+  const latestScrollYRef = useRef(initialScrollRef.current);
+  const isLeavingRef = useRef(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (isLeavingRef.current) return;
+      latestScrollYRef.current = window.scrollY;
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      saveRouteScroll(HISTORY_ROUTE_KEY, latestScrollYRef.current);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const targetY = initialScrollRef.current;
+    if (targetY <= 0) return;
+
+    let userInteracted = false;
+    const cancelSettle = () => {
+      userInteracted = true;
+    };
+    window.addEventListener('wheel', cancelSettle, { passive: true, once: true });
+    window.addEventListener('touchstart', cancelSettle, { passive: true, once: true });
+    window.addEventListener('pointerdown', cancelSettle, { passive: true, once: true });
+
+    const restore = () => {
+      if (userInteracted) return;
+      window.scrollTo(0, targetY);
+      latestScrollYRef.current = targetY;
+    };
+
+    restore();
+    const rafId = window.requestAnimationFrame(restore);
+    const settleTimer = window.setTimeout(restore, 90);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(settleTimer);
+      window.removeEventListener('wheel', cancelSettle);
+      window.removeEventListener('touchstart', cancelSettle);
+      window.removeEventListener('pointerdown', cancelSettle);
+    };
+  }, []);
+
+  const persistBeforeLeave = useCallback(() => {
+    isLeavingRef.current = true;
+    latestScrollYRef.current = window.scrollY;
+    saveRouteScroll(HISTORY_ROUTE_KEY, window.scrollY);
+  }, []);
 
   return (
     <div className="space-y-8">
@@ -87,6 +141,7 @@ export function HistoryPage() {
               <div className="flex items-center gap-4 min-w-0">
                 <Link
                   to={`/title/${item.mediaType}/${item.id}`}
+                  onClick={persistBeforeLeave}
                   className="h-20 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 dark:border-white/10"
                 >
                   <PosterArtwork
@@ -104,6 +159,7 @@ export function HistoryPage() {
                   </p>
                   <Link
                     to={`/title/${item.mediaType}/${item.id}`}
+                    onClick={persistBeforeLeave}
                     className="font-display block truncate text-base font-semibold text-slate-950 hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
                   >
                     {item.title}

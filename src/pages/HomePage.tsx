@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BookOpen, Bookmark, Check, Info, Sparkles, Star } from 'lucide-react';
 import { MediaCarousel } from '../components/cards/MediaCarousel';
@@ -14,41 +14,96 @@ import {
   type HomeSectionsData,
 } from '../services/tmdb';
 import type { MediaItem } from '../types';
+import {
+  getHomeRecommendedCache,
+  getHomeSectionsCache,
+  getRouteScroll,
+  saveCarouselScroll,
+  saveHomeRecommendedCache,
+  saveHomeSectionsCache,
+  saveRouteScroll,
+} from '../utils/routeViewCache';
+
+const HOME_ROUTE_KEY = '/';
 
 export function HomePage() {
   const { isDemoMode, keysVersion } = useAppMode();
   const { getEntry, toggleWatchlist, recommendationProfile } = useLibrary();
 
-  const [homeData, setHomeData] = useState<HomeSectionsData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const homeCacheKey = `${isDemoMode ? 'demo' : 'live'}:${keysVersion}`;
+  const recCacheKey = useMemo(() => {
+    const excludeKey = Array.from(recommendationProfile.excludeKeys)
+      .sort()
+      .join(',');
+    return `${homeCacheKey}:${recommendationProfile.topMovieGenres.join(',')}:${recommendationProfile.topTvGenres.join(',')}:${excludeKey}`;
+  }, [homeCacheKey, recommendationProfile]);
+
+  const initialHomeData = getHomeSectionsCache<HomeSectionsData>(homeCacheKey);
+  const initialRecommended = getHomeRecommendedCache(recCacheKey);
+  const initialScrollSnapshot = getRouteScroll(HOME_ROUTE_KEY);
+
+  const [homeData, setHomeData] = useState<HomeSectionsData | null>(
+    () => initialHomeData,
+  );
+  const [loading, setLoading] = useState(() => !initialHomeData);
   const [error, setError] = useState<string | null>(null);
 
-  const [recommended, setRecommended] = useState<MediaItem[]>([]);
-  const [recLoading, setRecLoading] = useState(true);
+  const [recommended, setRecommended] = useState<MediaItem[]>(
+    () => initialRecommended ?? [],
+  );
+  const [recLoading, setRecLoading] = useState(() => !initialRecommended);
   const [heroDescriptionOpen, setHeroDescriptionOpen] = useState(false);
 
-  const loadHome = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getHomeSections(isDemoMode);
-      setHomeData(data);
-    } catch (err: unknown) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Не удалось загрузить главную страницу.',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [isDemoMode, keysVersion]);
+  const latestScrollYRef = useRef<number>(initialScrollSnapshot?.scrollY ?? 0);
+  const isLeavingRef = useRef(false);
+  const pendingRestoreScrollYRef = useRef<number | null>(
+    initialScrollSnapshot && initialScrollSnapshot.scrollY > 0
+      ? initialScrollSnapshot.scrollY
+      : null,
+  );
+
+  const loadHome = useCallback(
+    async (forceRefresh = false) => {
+      if (!forceRefresh) {
+        const cached = getHomeSectionsCache<HomeSectionsData>(homeCacheKey);
+        if (cached) {
+          setHomeData(cached);
+          setLoading(false);
+          setError(null);
+          return;
+        }
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await getHomeSections(isDemoMode);
+        saveHomeSectionsCache(homeCacheKey, data);
+        setHomeData(data);
+      } catch (err: unknown) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Не удалось загрузить главную страницу.',
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [isDemoMode, homeCacheKey],
+  );
 
   useEffect(() => {
     void loadHome();
   }, [loadHome]);
 
   useEffect(() => {
+    const cachedRec = getHomeRecommendedCache(recCacheKey);
+    if (cachedRec) {
+      setRecommended(cachedRec);
+      setRecLoading(false);
+      return;
+    }
+
     let active = true;
     setRecLoading(true);
     getRecommendedForUser({
@@ -58,7 +113,10 @@ export function HomePage() {
       useDemo: isDemoMode,
     })
       .then((items) => {
-        if (active) setRecommended(items);
+        if (active) {
+          saveHomeRecommendedCache(recCacheKey, items);
+          setRecommended(items);
+        }
       })
       .catch(() => {
         if (active) setRecommended([]);
@@ -70,13 +128,72 @@ export function HomePage() {
     return () => {
       active = false;
     };
-  }, [isDemoMode, keysVersion, recommendationProfile]);
+  }, [isDemoMode, recCacheKey, recommendationProfile]);
+
+  // Отслеживаем и сохраняем вертикальную позицию на главной странице
+  useEffect(() => {
+    const handleScroll = () => {
+      if (isLeavingRef.current) return;
+      latestScrollYRef.current = window.scrollY;
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      saveRouteScroll(HOME_ROUTE_KEY, latestScrollYRef.current);
+    };
+  }, []);
+
+  // Мгновенно восстанавливаем позицию прокрутки при возврате со страницы фильма
+  useLayoutEffect(() => {
+    const targetY = pendingRestoreScrollYRef.current;
+    if (targetY === null || loading) return;
+    pendingRestoreScrollYRef.current = null;
+
+    let userInteracted = false;
+    const cancelSettle = () => {
+      userInteracted = true;
+    };
+    window.addEventListener('wheel', cancelSettle, { passive: true, once: true });
+    window.addEventListener('touchstart', cancelSettle, { passive: true, once: true });
+    window.addEventListener('pointerdown', cancelSettle, { passive: true, once: true });
+
+    const restore = () => {
+      if (userInteracted) return;
+      window.scrollTo(0, targetY);
+      latestScrollYRef.current = targetY;
+    };
+
+    restore();
+    const rafId = window.requestAnimationFrame(restore);
+    const settleTimer = window.setTimeout(restore, 90);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(settleTimer);
+      window.removeEventListener('wheel', cancelSettle);
+      window.removeEventListener('touchstart', cancelSettle);
+      window.removeEventListener('pointerdown', cancelSettle);
+    };
+  }, [loading]);
+
+  const handleBeforeLeave = useCallback(() => {
+    isLeavingRef.current = true;
+    latestScrollYRef.current = window.scrollY;
+    saveRouteScroll(HOME_ROUTE_KEY, window.scrollY);
+  }, []);
+
+  const handleCarouselScroll = useCallback(
+    (carouselId: string, scrollLeft: number) => {
+      saveCarouselScroll(HOME_ROUTE_KEY, carouselId, scrollLeft);
+    },
+    [],
+  );
 
   const hero = homeData?.hero ?? null;
   const heroEntry = hero ? getEntry(hero.id, hero.mediaType) : undefined;
   const heroInCollection = Boolean(
     heroEntry?.status || heroEntry?.isFavorite,
   );
+  const savedCarousels = initialScrollSnapshot?.carouselScrollLeft ?? {};
 
   return (
     <div className="space-y-10">
@@ -84,7 +201,7 @@ export function HomePage() {
       {loading ? (
         <HeroSkeleton />
       ) : error ? (
-        <ErrorState message={error} onRetry={() => void loadHome()} />
+        <ErrorState message={error} onRetry={() => void loadHome(true)} />
       ) : hero ? (
         <section
           aria-label="Рекомендуемый фильм"
@@ -161,6 +278,7 @@ export function HomePage() {
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <Link
                   to={`/title/${hero.mediaType}/${hero.id}`}
+                  onClick={handleBeforeLeave}
                   className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-blue-400"
                 >
                   <Info className="h-4 w-4" aria-hidden="true" />
@@ -201,6 +319,7 @@ export function HomePage() {
 
                 <Link
                   to="/catalog?panel=mood"
+                  onClick={handleBeforeLeave}
                   className="inline-flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-xl border border-violet-400/30 bg-violet-500/20 px-4 py-2.5 text-sm font-medium text-violet-200 transition-colors hover:bg-violet-500/30"
                 >
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
@@ -212,6 +331,7 @@ export function HomePage() {
             {!hero.backdropPath ? (
               <Link
                 to={`/title/${hero.mediaType}/${hero.id}`}
+                onClick={handleBeforeLeave}
                 aria-label={`Открыть постер: ${hero.title}`}
                 className="hidden w-48 shrink-0 overflow-hidden rounded-xl border border-white/15 shadow-2xl transition-transform duration-200 hover:scale-[1.02] md:block lg:w-52"
               >
@@ -243,6 +363,10 @@ export function HomePage() {
         loading={recLoading}
         catalogHref="/catalog"
         catalogLabel="Открыть каталог"
+        carouselId="recommended"
+        initialScrollLeft={savedCarousels.recommended}
+        onScrollLeftChange={handleCarouselScroll}
+        onItemSelect={handleBeforeLeave}
       />
 
       {homeData ? (
@@ -252,6 +376,10 @@ export function HomePage() {
             items={homeData.trending}
             catalogHref="/catalog?type=movie&sort=popularity.desc"
             loading={loading}
+            carouselId="trending"
+            initialScrollLeft={savedCarousels.trending}
+            onScrollLeftChange={handleCarouselScroll}
+            onItemSelect={handleBeforeLeave}
           />
 
           <MediaCarousel
@@ -259,6 +387,10 @@ export function HomePage() {
             items={homeData.topRated}
             catalogHref="/catalog?type=movie&sort=vote_average.desc"
             loading={loading}
+            carouselId="topRated"
+            initialScrollLeft={savedCarousels.topRated}
+            onScrollLeftChange={handleCarouselScroll}
+            onItemSelect={handleBeforeLeave}
           />
 
           <MediaCarousel
@@ -266,6 +398,10 @@ export function HomePage() {
             items={homeData.nowPlaying}
             catalogHref="/catalog?type=movie&sort=release_date.desc"
             loading={loading}
+            carouselId="nowPlaying"
+            initialScrollLeft={savedCarousels.nowPlaying}
+            onScrollLeftChange={handleCarouselScroll}
+            onItemSelect={handleBeforeLeave}
           />
 
           <MediaCarousel
@@ -273,6 +409,10 @@ export function HomePage() {
             items={homeData.popularSeries}
             catalogHref="/catalog?type=tv&sort=popularity.desc"
             loading={loading}
+            carouselId="popularSeries"
+            initialScrollLeft={savedCarousels.popularSeries}
+            onScrollLeftChange={handleCarouselScroll}
+            onItemSelect={handleBeforeLeave}
           />
         </>
       ) : null}

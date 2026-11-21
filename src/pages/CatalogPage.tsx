@@ -78,8 +78,16 @@ function parseGenreList(raw: string | null): number[] {
   );
 }
 
+function parsePersonId(raw: string | null): number | null {
+  if (!raw) return null;
+  const num = Number(raw);
+  return Number.isInteger(num) && num > 0 ? num : null;
+}
+
 function readInitialFilters(searchParams: URLSearchParams): CatalogFilters {
   const ratingNum = Number(searchParams.get('rating') ?? '0');
+  const personId = parsePersonId(searchParams.get('person'));
+  const personName = (searchParams.get('personName') ?? '').trim();
   return {
     mediaType: parseMediaScope(searchParams.get('type')),
     query: searchParams.get('q') ?? '',
@@ -90,6 +98,8 @@ function readInitialFilters(searchParams: URLSearchParams): CatalogFilters {
     minRating: Number.isFinite(ratingNum) && ratingNum >= 0 ? ratingNum : 0,
     sortBy: parseSortOption(searchParams.get('sort')),
     hideWatched: searchParams.get('unwatched') === '1',
+    personId,
+    personName: personId || personName ? personName : '',
   };
 }
 
@@ -97,6 +107,12 @@ function serializeFiltersToParams(next: CatalogFilters): URLSearchParams {
   const params = new URLSearchParams();
   if (next.mediaType !== 'all') params.set('type', next.mediaType);
   if (next.sortBy !== 'popularity.desc') params.set('sort', next.sortBy);
+  if (next.personId && next.personId > 0) {
+    params.set('person', String(next.personId));
+  }
+  if (next.personName && next.personName.trim()) {
+    params.set('personName', next.personName.trim());
+  }
   if (next.query.trim()) params.set('q', next.query.trim());
   if (next.moods.length > 0) params.set('mood', next.moods.join(','));
   if (next.genreIds.length > 0) params.set('genre', next.genreIds.join(','));
@@ -146,6 +162,9 @@ export function CatalogPage() {
   const [totalPages, setTotalPages] = useState(
     () => initialSnapshot?.totalPages ?? 1,
   );
+  const [totalResults, setTotalResults] = useState<number>(
+    () => initialSnapshot?.totalResults ?? initialSnapshot?.items.length ?? 0,
+  );
   const [loading, setLoading] = useState(() => !initialSnapshot);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -175,6 +194,7 @@ export function CatalogPage() {
         }
       : null,
   );
+  const [restoreVersion, setRestoreVersion] = useState(0);
   const [restoredFocusKey, setRestoredFocusKey] = useState<string | null>(
     () => initialSnapshot?.focusedItemKey ?? null,
   );
@@ -188,6 +208,7 @@ export function CatalogPage() {
   latestCacheKeyRef.current = activeCacheKey;
   const latestSearchRef = useRef<string>(location.search);
   latestSearchRef.current = location.search;
+  const lastAppliedSearchRef = useRef<string>(location.search);
 
   // Состояние модального окна «Случайный выбор на вечер»
   const [randomOpen, setRandomOpen] = useState(false);
@@ -202,28 +223,41 @@ export function CatalogPage() {
     [watchedItems],
   );
 
-  // Синхронизация URL-параметров при переходе с главной страницы (карусели, кнопка «Подобрать на вечер»)
+  // Синхронизация URL-параметров при переходе по истории (Назад/Вперёд) или с других страниц (актёр, карусель)
   useEffect(() => {
-    const typeParam = searchParams.get('type');
-    const sortParam = searchParams.get('sort');
-    if (
-      typeParam === 'movie' ||
-      typeParam === 'tv' ||
-      typeParam === 'all' ||
-      typeParam === 'anime'
-    ) {
-      setFilters((prev) => {
-        const nextSort = sortParam ? parseSortOption(sortParam) : prev.sortBy;
-        if (prev.mediaType === typeParam && prev.sortBy === nextSort) return prev;
-        return {
-          ...prev,
-          mediaType: typeParam,
-          genreIds: prev.mediaType === typeParam ? prev.genreIds : [],
-          sortBy: nextSort,
-        };
-      });
+    if (location.search === lastAppliedSearchRef.current) return;
+    lastAppliedSearchRef.current = location.search;
+
+    const parsed = readInitialFilters(new URLSearchParams(location.search));
+    const nextKey = buildCatalogCacheKey(parsed, isDemoMode, keysVersion);
+    const cached = getMatchingCatalogSnapshot(nextKey);
+
+    setFilters(parsed);
+
+    if (cached) {
+      skipInitialFetchKeyRef.current = nextKey;
+      setItems(cached.items);
+      setPage(cached.page);
+      setTotalPages(cached.totalPages);
+      setTotalResults(cached.totalResults ?? cached.items.length);
+      setLoading(false);
+      setError(null);
+      pendingRestoreRef.current = {
+        scrollY: cached.scrollY,
+        focusedItemKey: cached.focusedItemKey,
+      };
+      latestScrollYRef.current = cached.scrollY;
+      lastFocusedItemKeyRef.current = cached.focusedItemKey;
+      setRestoredFocusKey(cached.focusedItemKey);
+      setRestoreVersion((v) => v + 1);
+    } else {
+      pendingRestoreRef.current = null;
+      latestScrollYRef.current = 0;
+      lastFocusedItemKeyRef.current = null;
+      setRestoredFocusKey(null);
+      window.scrollTo(0, 0);
     }
-  }, [searchParams]);
+  }, [location.search, isDemoMode, keysVersion]);
 
   useEffect(() => {
     let active = true;
@@ -241,6 +275,8 @@ export function CatalogPage() {
     seenPickKeysRef.current = new Set();
   }, [
     filters.mediaType,
+    filters.personId,
+    filters.personName,
     filters.moods,
     filters.genreIds,
     filters.country,
@@ -287,6 +323,7 @@ export function CatalogPage() {
         });
         setPage(result.page);
         setTotalPages(result.totalPages);
+        setTotalResults(result.totalResults);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           return;
@@ -306,6 +343,8 @@ export function CatalogPage() {
     },
     [
       filters.mediaType,
+      filters.personId,
+      filters.personName,
       filters.moods,
       filters.genreIds,
       filters.country,
@@ -358,6 +397,7 @@ export function CatalogPage() {
       items,
       page,
       totalPages,
+      totalResults,
       scrollY: latestScrollYRef.current,
       focusedItemKey: lastFocusedItemKeyRef.current,
     });
@@ -371,6 +411,7 @@ export function CatalogPage() {
     items,
     page,
     totalPages,
+    totalResults,
   ]);
 
   // Мгновенно восстанавливаем позицию прокрутки и фокус на фильме при возврате со страницы тайтла
@@ -379,7 +420,16 @@ export function CatalogPage() {
     if (!pending || loading) return;
     pendingRestoreRef.current = null;
 
+    let userInteracted = false;
+    const cancelSettle = () => {
+      userInteracted = true;
+    };
+    window.addEventListener('wheel', cancelSettle, { passive: true, once: true });
+    window.addEventListener('touchstart', cancelSettle, { passive: true, once: true });
+    window.addEventListener('pointerdown', cancelSettle, { passive: true, once: true });
+
     const restoreScrollAndFocus = () => {
+      if (userInteracted) return;
       if (pending.scrollY > 0) {
         window.scrollTo(0, pending.scrollY);
         latestScrollYRef.current = pending.scrollY;
@@ -390,11 +440,11 @@ export function CatalogPage() {
           `[data-media-key="${pending.focusedItemKey}"]`,
         );
         if (target) {
-          target.focus({ preventScroll: true });
           if (isTvMode()) {
+            target.focus({ preventScroll: true });
             target.classList.add('tv-focused');
           }
-          // Если из-за разницы высоты экрана карточка оказалась вне видимой зоны — аккуратно докручиваем до неё
+          // Если из-за разницы высоты окна карточка оказалась вне видимой зоны — аккуратно докручиваем до неё
           const rect = target.getBoundingClientRect();
           if (rect.top < 72 || rect.bottom > window.innerHeight - 24) {
             const centeredY = Math.max(
@@ -410,10 +460,15 @@ export function CatalogPage() {
 
     restoreScrollAndFocus();
     const rafId = window.requestAnimationFrame(restoreScrollAndFocus);
+    const settleTimer = window.setTimeout(restoreScrollAndFocus, 90);
     return () => {
       window.cancelAnimationFrame(rafId);
+      window.clearTimeout(settleTimer);
+      window.removeEventListener('wheel', cancelSettle);
+      window.removeEventListener('touchstart', cancelSettle);
+      window.removeEventListener('pointerdown', cancelSettle);
     };
-  }, [loading]);
+  }, [loading, restoreVersion]);
 
   const { visible: visibleItems, hiddenCount: hiddenWatchedCount } = useMemo(
     () => excludeWatchedItems(items, watchedKeys, filters.hideWatched),
@@ -437,8 +492,11 @@ export function CatalogPage() {
     lastFocusedItemKeyRef.current = null;
     setRestoredFocusKey(null);
     latestScrollYRef.current = 0;
+    const serialized = serializeFiltersToParams(next);
+    const serializedStr = serialized.toString();
+    lastAppliedSearchRef.current = serializedStr ? `?${serializedStr}` : '';
     setFilters(next);
-    setSearchParams(serializeFiltersToParams(next), { replace: true });
+    setSearchParams(serialized, { replace: true });
   };
 
   const handleReset = () => {
@@ -452,6 +510,8 @@ export function CatalogPage() {
       minRating: 0,
       sortBy: 'popularity.desc',
       hideWatched: false,
+      personId: null,
+      personName: '',
     };
     handleFiltersChange(resetFilters);
   };
@@ -557,14 +617,23 @@ export function CatalogPage() {
     visibleItems.length === 0 &&
     filters.hideWatched;
 
+  const hasActiveActor = Boolean(
+    (filters.personId && filters.personId > 0) ||
+      (filters.personName && filters.personName.trim().length > 0),
+  );
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-1">
         <h1 className="font-display text-balance text-2xl font-bold tracking-tight text-slate-950 dark:text-white sm:text-3xl">
-          Каталог и подбор
+          {hasActiveActor && filters.personName?.trim()
+            ? `Фильмография: ${filters.personName.trim()}`
+            : 'Каталог и подбор'}
         </h1>
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Единый поиск фильмов и сериалов по названию, актёрам, настроению вечера, стране и рейтингу.
+          {hasActiveActor
+            ? 'Все фильмы и сериалы с участием выбранного актёра. Можно дополнительно фильтровать по формату, жанрам, году и рейтингу.'
+            : 'Единый поиск фильмов и сериалов по названию, актёрам, настроению вечера, стране и рейтингу.'}
         </p>
       </div>
 
@@ -573,6 +642,7 @@ export function CatalogPage() {
         genres={genres}
         hiddenWatchedCount={hiddenWatchedCount}
         watchedTotalCount={watchedItems.length}
+        totalResults={hasActiveActor ? totalResults : undefined}
         highlightMoods={highlightMoods}
         isPickingRandom={randomLoading}
         onChange={handleFiltersChange}

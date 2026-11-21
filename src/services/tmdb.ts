@@ -34,6 +34,10 @@ import {
 import { filterDemoCatalog } from '../utils/demoFilter';
 import { buildTmdbImageUrl, type TmdbImageSize } from '../utils/imageUrl';
 import { getMoodGenresForMediaType } from '../utils/moodMapping';
+import {
+  filterAndPaginatePersonCredits,
+  type PersonCreditEntry,
+} from '../utils/personFilmography';
 import { getTmdbApiKeyValue, tmdbNativeGet } from './apiKeys';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
@@ -104,6 +108,22 @@ interface TmdbPersonSearchResponse {
     known_for?: RawTmdbMedia[];
   }>;
 }
+
+interface RawPersonCreditMedia extends RawTmdbMedia {
+  character?: string;
+}
+
+interface TmdbPersonCombinedCreditsResponse {
+  id?: number;
+  cast?: RawPersonCreditMedia[];
+  crew?: RawPersonCreditMedia[];
+}
+
+const PERSON_CREDITS_CACHE_TTL_MS = 15 * 60 * 1000;
+const personCreditsCache = new Map<
+  string,
+  { entries: PersonCreditEntry[]; fetchedAt: number }
+>();
 
 interface TmdbDetailsRaw extends RawTmdbMedia {
   credits?: {
@@ -458,6 +478,59 @@ async function fetchDiscoverForSingleType(
   };
 }
 
+async function fetchPersonCombinedCredits(
+  personId: number,
+  signal?: AbortSignal,
+): Promise<PersonCreditEntry[]> {
+  const keyTag = getTmdbApiKey().slice(-8);
+  const cacheKey = `${personId}:${keyTag}`;
+  const cached = personCreditsCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < PERSON_CREDITS_CACHE_TTL_MS) {
+    return cached.entries;
+  }
+
+  const data = await tmdbFetch<TmdbPersonCombinedCreditsResponse>(
+    `/person/${personId}/combined_credits`,
+    {},
+    signal,
+  );
+
+  const rawCast = Array.isArray(data.cast) ? data.cast : [];
+  const entries: PersonCreditEntry[] = [];
+
+  for (const raw of rawCast) {
+    if (!raw || typeof raw.id !== 'number') continue;
+    const mediaType: MediaType | null =
+      raw.media_type === 'movie'
+        ? 'movie'
+        : raw.media_type === 'tv'
+          ? 'tv'
+          : raw.title
+            ? 'movie'
+            : raw.name
+              ? 'tv'
+              : null;
+    if (!mediaType) continue;
+
+    entries.push({
+      item: normalizeMediaItem(raw, mediaType),
+      originalLanguage: raw.original_language,
+      character: raw.character,
+    });
+  }
+
+  personCreditsCache.set(cacheKey, {
+    entries,
+    fetchedAt: Date.now(),
+  });
+  if (personCreditsCache.size > 24) {
+    const oldest = personCreditsCache.keys().next().value;
+    if (oldest !== undefined) personCreditsCache.delete(oldest);
+  }
+
+  return entries;
+}
+
 export async function fetchCatalogPage(
   filters: CatalogFilters,
   page: number,
@@ -472,6 +545,12 @@ export async function fetchCatalogPage(
       totalPages: 1,
       totalResults: all.length,
     };
+  }
+
+  // Полная фильмография выбранного актёра (все фильмы и сериалы с его участием)
+  if (filters.personId && filters.personId > 0) {
+    const entries = await fetchPersonCombinedCredits(filters.personId, signal);
+    return filterAndPaginatePersonCredits(entries, filters, page);
   }
 
   const trimmedQuery = filters.query.trim();

@@ -43,23 +43,36 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK, Build-Tools & Platform SDK
+      - name: Setup Android SDK, NDK & Build-Tools
         shell: bash
         run: |
+          set -euo pipefail
+          ANDROID_SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           NDK_VERSION="27.2.12479018"
           BUILD_TOOLS_VERSION="35.0.0"
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install \
+
+          echo "ANDROID_HOME=${ANDROID_SDK}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK}" >> "$GITHUB_ENV"
+
+          SDKMANAGER="$(find "${ANDROID_SDK}/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [[ -z "${SDKMANAGER}" ]]; then
+            echo "Ошибка: sdkmanager не найден в ${ANDROID_SDK}/cmdline-tools"
+            exit 1
+          fi
+          echo "Using sdkmanager: ${SDKMANAGER}"
+          echo "$(dirname "${SDKMANAGER}")" >> "$GITHUB_PATH"
+
+          yes | "${SDKMANAGER}" --licenses > /dev/null 2>&1 || true
+          "${SDKMANAGER}" --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;${BUILD_TOOLS_VERSION}" \
             "ndk;${NDK_VERSION}"
-          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
-          echo "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}" >> "$GITHUB_PATH"
+
+          echo "NDK_HOME=${ANDROID_SDK}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "${ANDROID_SDK}/build-tools/${BUILD_TOOLS_VERSION}" >> "$GITHUB_PATH"
+          echo "${ANDROID_SDK}/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install Rust stable (Android ARMv7 + ARM64)
         uses: dtolnay/rust-toolchain@stable

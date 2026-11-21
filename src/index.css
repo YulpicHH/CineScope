@@ -188,12 +188,30 @@ body.tv-mode [data-tv-focusable="true"].tv-focused {
   z-index: 20;
 }
 
+/* В плотных сегментированных переключателях (Все / Фильмы / Сериалы / Аниме) не масштабируем кнопку,
+   чтобы соседние пункты не перекрывали друг друга при навигации D-Pad */
+body.tv-mode [role="group"] button.tv-focused,
+body.tv-mode [role="radiogroup"] button.tv-focused {
+  transform: none;
+  outline-offset: 2px !important;
+}
+
 body.tv-mode input.tv-focused,
 body.tv-mode textarea.tv-focused,
 body.tv-mode select.tv-focused {
   transform: none;
   border-color: #60A5FA !important;
   background-color: #0E131F;
+}
+
+body.tv-mode input[data-tv-editing="true"],
+body.tv-mode textarea[data-tv-editing="true"] {
+  outline: 3px solid #34D399 !important;
+  outline-offset: 3px !important;
+  border-color: #34D399 !important;
+  box-shadow:
+    0 0 0 6px rgba(16, 185, 129, 0.28),
+    0 12px 30px rgba(0, 0, 0, 0.55) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

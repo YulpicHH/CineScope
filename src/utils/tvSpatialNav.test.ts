@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import {
   findNextFocusableIndex,
   mapKeyToTvAction,
+  shouldAcceptTvKeyEvent,
   type FocusRect,
 } from './tvSpatialNav';
 import { isAndroidTvUserAgent, isAndroidUserAgent } from './platform';
+import {
+  buildQrSvgModel,
+  mergeReceivedPairingKeys,
+  normalizePairingPayload,
+} from '../services/tvPairing';
 
 function rect(left: number, top: number, width = 160, height = 240): FocusRect {
   return {
@@ -64,6 +70,46 @@ test('findNextFocusableIndex navigates a 3x2 grid accurately across all 4 direct
   assert.equal(findNextFocusableIndex(grid[4], grid, 'down', 4), -1);
 });
 
+test('findNextFocusableIndex steps through tightly packed segmented tabs (Все / Фильмы / Сериалы / Аниме) without skipping', () => {
+  // Zero-gap segmented buttons + search input to the right
+  const tabs: FocusRect[] = [
+    rect(40, 140, 56, 40), // 0: Все
+    rect(96, 140, 88, 40), // 1: Фильмы
+    rect(184, 140, 94, 40), // 2: Сериалы
+    rect(278, 140, 76, 40), // 3: Аниме
+    rect(370, 140, 420, 40), // 4: Поиск
+  ];
+
+  // Step left-to-right one by one
+  assert.equal(findNextFocusableIndex(tabs[0], tabs, 'right', 0), 1);
+  assert.equal(findNextFocusableIndex(tabs[1], tabs, 'right', 1), 2);
+  assert.equal(findNextFocusableIndex(tabs[2], tabs, 'right', 2), 3);
+  assert.equal(findNextFocusableIndex(tabs[3], tabs, 'right', 3), 4);
+
+  // Step right-to-left one by one
+  assert.equal(findNextFocusableIndex(tabs[4], tabs, 'left', 4), 3);
+  assert.equal(findNextFocusableIndex(tabs[3], tabs, 'left', 3), 2);
+  assert.equal(findNextFocusableIndex(tabs[2], tabs, 'left', 2), 1);
+  assert.equal(findNextFocusableIndex(tabs[1], tabs, 'left', 1), 0);
+
+  // Even if the focused tab overlaps neighbors by 3px (e.g. from scale), it must STILL pick immediate neighbor
+  const scaledSerials: FocusRect = rect(181, 139, 100, 42);
+  assert.equal(findNextFocusableIndex(scaledSerials, tabs, 'left', 2), 1);
+  assert.equal(findNextFocusableIndex(scaledSerials, tabs, 'right', 2), 3);
+});
+
+test('shouldAcceptTvKeyEvent deduplicates rapid non-repeat D-Pad bounces while allowing key hold repeats', () => {
+  assert.equal(shouldAcceptTvKeyEvent('right', false, null, 0, 100), true);
+  // Duplicate non-repeat event 15ms later -> rejected
+  assert.equal(shouldAcceptTvKeyEvent('right', false, 'right', 100, 115), false);
+  // Different direction 15ms later -> accepted
+  assert.equal(shouldAcceptTvKeyEvent('down', false, 'right', 100, 115), true);
+  // Same direction with repeat=true (holding button) -> accepted
+  assert.equal(shouldAcceptTvKeyEvent('right', true, 'right', 100, 115), true);
+  // Same direction after debounce window -> accepted
+  assert.equal(shouldAcceptTvKeyEvent('right', false, 'right', 100, 160), true);
+});
+
 test('findNextFocusableIndex prefers same-row elements when moving horizontally even if another row is closer diagonally', () => {
   const candidates: FocusRect[] = [
     rect(40, 200, 140, 44), // 0: origin button
@@ -118,4 +164,41 @@ test('isAndroidTvUserAgent and isAndroidUserAgent detect SberBox / SaluteTV / An
 
   assert.equal(isAndroidTvUserAgent(desktopMac), false);
   assert.equal(isAndroidUserAgent(desktopMac), false);
+});
+
+test('TV QR pairing helpers build crisp SVG path and normalize/merge received API keys', () => {
+  const qr = buildQrSvgModel('http://192.168.1.42:54321/pair?token=0123456789abcdef', 2);
+  assert.ok(qr.size >= 21);
+  assert.equal(qr.viewBoxSize, qr.size + 4);
+  assert.ok(qr.pathData.startsWith('M'));
+
+  const valid = normalizePairingPayload({
+    tmdbApiKey: '  tmdb_key_123  ',
+    kinopoiskApiKey: ' kp-uuid-456 ',
+  });
+  assert.equal(valid.ok, true);
+  if (valid.ok) {
+    assert.deepEqual(valid.payload, {
+      tmdbApiKey: 'tmdb_key_123',
+      kinopoiskApiKey: 'kp-uuid-456',
+    });
+  }
+
+  const empty = normalizePairingPayload({ tmdbApiKey: '  ', kinopoiskApiKey: '' });
+  assert.equal(empty.ok, false);
+
+  const badWhitespace = normalizePairingPayload({
+    tmdbApiKey: 'abc def',
+    kinopoiskApiKey: '',
+  });
+  assert.equal(badWhitespace.ok, false);
+
+  const merged = mergeReceivedPairingKeys(
+    { tmdbApiKey: '', kinopoiskApiKey: 'new-kp-uuid' },
+    { tmdbApiKey: 'existing-tmdb', kinopoiskApiKey: 'old-kp' },
+  );
+  assert.deepEqual(merged, {
+    tmdbApiKey: 'existing-tmdb',
+    kinopoiskApiKey: 'new-kp-uuid',
+  });
 });

@@ -1,3 +1,5 @@
+mod tv_pairing;
+
 use serde::{Deserialize, Serialize};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::fs;
@@ -14,10 +16,14 @@ use std::sync::Mutex;
 use std::time::Duration;
 #[cfg(desktop)]
 use tauri::{
-    webview::NewWindowResponse, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder,
+    webview::NewWindowResponse, Theme, Url, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri::State;
+use tauri::{Manager, RunEvent, State};
 use tauri_plugin_http::reqwest;
+use tv_pairing::{
+    poll_pairing_session, start_pairing_session, TvPairingPollResult, TvPairingSessionInfo,
+    TvPairingState,
+};
 
 const KINOPOISK_API_URL: &str = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
 #[cfg(desktop)]
@@ -842,6 +848,27 @@ async fn open_watch_window(
     )
 }
 
+#[tauri::command]
+fn start_tv_pairing_server(
+    app: tauri::AppHandle,
+    pairing_state: State<'_, TvPairingState>,
+) -> Result<TvPairingSessionInfo, String> {
+    start_pairing_session(app, &pairing_state)
+}
+
+#[tauri::command]
+fn stop_tv_pairing_server(pairing_state: State<'_, TvPairingState>) {
+    pairing_state.stop_active();
+}
+
+#[tauri::command]
+fn poll_tv_pairing_result(
+    session_id: Option<u32>,
+    pairing_state: State<'_, TvPairingState>,
+) -> TvPairingPollResult {
+    poll_pairing_session(&pairing_state, session_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let client = reqwest::Client::builder()
@@ -851,6 +878,7 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .manage(HttpClientState { client })
+        .manage(TvPairingState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init());
 
@@ -863,7 +891,10 @@ pub fn run() {
             fetch_kinopoisk_candidates,
             open_watch_window,
             check_player_browsers,
-            check_firefox_available
+            check_firefox_available,
+            start_tv_pairing_server,
+            stop_tv_pairing_server,
+            poll_tv_pairing_result
         ]);
 
     #[cfg(not(desktop))]
@@ -871,7 +902,10 @@ pub fn run() {
         fetch_kinopoisk_candidates,
         open_watch_window,
         check_player_browsers,
-        check_firefox_available
+        check_firefox_available,
+        start_tv_pairing_server,
+        stop_tv_pairing_server,
+        poll_tv_pairing_result
     ]);
 
     let app = builder
@@ -884,9 +918,18 @@ pub fn run() {
             if let Some(player_state) = app_handle.try_state::<PlayerWindowState>() {
                 terminate_browser_player(&player_state);
             }
+            if let Some(pairing_state) = app_handle.try_state::<TvPairingState>() {
+                pairing_state.stop_active();
+            }
         }
     });
 
     #[cfg(not(desktop))]
-    app.run(|_app_handle, _event| {});
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            if let Some(pairing_state) = app_handle.try_state::<TvPairingState>() {
+                pairing_state.stop_active();
+            }
+        }
+    });
 }

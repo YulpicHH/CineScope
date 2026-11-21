@@ -17,6 +17,7 @@ import type {
 } from '../../types';
 import { CATALOG_COUNTRIES } from '../../utils/catalogHelpers';
 import { MOOD_DEFINITIONS } from '../../utils/moodMapping';
+import { isTvMode } from '../../utils/platform';
 
 interface CatalogFilterBarProps {
   filters: CatalogFilters;
@@ -68,6 +69,7 @@ export function CatalogFilterBar({
   const [genresOpen, setGenresOpen] = useState(
     () => filters.genreIds.length > 0,
   );
+  const tvMode = isTvMode();
 
   const handleMediaTypeChange = (mediaType: CatalogMediaScope) => {
     if (mediaType === filters.mediaType) return;
@@ -124,7 +126,7 @@ export function CatalogFilterBar({
         <div
           role="group"
           aria-label="Тип контента"
-          className="inline-flex w-full shrink-0 rounded-xl bg-slate-100 p-1 dark:bg-[#0B0E15] sm:w-auto"
+          className="inline-flex w-full shrink-0 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-[#0B0E15] sm:w-auto"
         >
           {SCOPE_OPTIONS.map((opt) => {
             const active = filters.mediaType === opt.value;
@@ -132,6 +134,7 @@ export function CatalogFilterBar({
               <button
                 key={opt.value}
                 type="button"
+                data-testid={`catalog-scope-${opt.value}`}
                 onClick={() => handleMediaTypeChange(opt.value)}
                 aria-pressed={active}
                 className={`flex-1 whitespace-nowrap rounded-lg px-3.5 py-2 text-sm font-medium transition-colors sm:flex-none ${
@@ -165,7 +168,9 @@ export function CatalogFilterBar({
                 ? 'Название аниме, режиссёр или сэйю...'
                 : 'Название фильма или сериала, актёр, режиссёр...'
             }
-            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-9 text-base text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100 dark:placeholder:text-slate-500"
+            className={`w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 text-base text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none sm:text-sm dark:border-white/10 dark:bg-[#0B0E15] dark:text-slate-100 dark:placeholder:text-slate-500 ${
+              tvMode && !filters.query ? 'pr-24' : 'pr-9'
+            }`}
           />
           {filters.query ? (
             <button
@@ -176,6 +181,13 @@ export function CatalogFilterBar({
             >
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
+          ) : tvMode ? (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 whitespace-nowrap text-xs font-medium text-slate-500"
+            >
+              ОК — ввод
+            </span>
           ) : null}
         </div>
 

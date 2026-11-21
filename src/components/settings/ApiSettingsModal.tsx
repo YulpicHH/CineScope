@@ -41,6 +41,12 @@ import {
   getPlayerModeOptions,
   type PlayerModeId,
 } from '../../utils/playerProfile';
+import {
+  mergeReceivedPairingKeys,
+  normalizePairingPayload,
+  type TvPairingPayload,
+} from '../../services/tvPairing';
+import { TvQrPairingPanel } from './TvQrPairingPanel';
 
 const TMDB_API_SETTINGS_URL = 'https://www.themoviedb.org/settings/api';
 const KINOPOISK_API_URL = 'https://kinopoiskapiunofficial.tech';
@@ -189,6 +195,55 @@ export function ApiSettingsModal() {
     );
   };
 
+  const handleQrKeysReceived = async (rawPayload: TvPairingPayload) => {
+    if (validating) return;
+
+    const normalized = normalizePairingPayload(rawPayload);
+    if (!normalized.ok) {
+      setErrorMessage(normalized.message);
+      return;
+    }
+
+    const merged = mergeReceivedPairingKeys(normalized.payload, {
+      tmdbApiKey: tmdbInput,
+      kinopoiskApiKey: kinopoiskInput,
+    });
+
+    setTmdbInput(merged.tmdbApiKey);
+    setKinopoiskInput(merged.kinopoiskApiKey);
+    setErrorMessage(null);
+    setInfoMessage('Ключи получены с телефона — проверяем и сохраняем...');
+
+    if (merged.tmdbApiKey) {
+      setValidating(true);
+      try {
+        const result = await validateTmdbApiKey(merged.tmdbApiKey);
+        if (!result.ok) {
+          setInfoMessage(null);
+          setErrorMessage(result.message);
+          return;
+        }
+        saveApiKeys({
+          tmdbApiKey: merged.tmdbApiKey,
+          kinopoiskApiKey: merged.kinopoiskApiKey,
+        });
+      } finally {
+        setValidating(false);
+      }
+      return;
+    }
+
+    if (tmdbKeySource === 'env' || (!isFirstRun && isDemoMode)) {
+      saveApiKeys({
+        tmdbApiKey: '',
+        kinopoiskApiKey: merged.kinopoiskApiKey,
+      });
+      return;
+    }
+
+    setInfoMessage('Ключ Kinopoisk подставлен. Добавьте также ключ TMDB API (v3) для полного каталога.');
+  };
+
   const handleClearKeys = () => {
     if (validating) return;
     clearApiKeys();
@@ -226,7 +281,11 @@ export function ApiSettingsModal() {
         }
       }}
     >
-      <div className="safe-modal-panel relative w-full max-w-lg overflow-y-auto rounded-2xl border border-white/[0.1] bg-[#11151E] text-[#F3F5F9] shadow-2xl">
+      <div
+        className={`safe-modal-panel relative w-full overflow-y-auto rounded-2xl border border-white/[0.1] bg-[#11151E] text-[#F3F5F9] shadow-2xl ${
+          tvMode ? 'max-w-4xl' : 'max-w-lg'
+        }`}
+      >
         {/* Верхняя полоса заголовка */}
         <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] px-6 py-5">
           <div className="space-y-1">
@@ -268,6 +327,7 @@ export function ApiSettingsModal() {
           ) : null}
         </div>
 
+        <div className={tvMode ? 'grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_310px]' : ''}>
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-5 px-6 py-5">
           {/* Поле TMDB API Key (v3) */}
           <div className="space-y-2">
@@ -636,6 +696,15 @@ export function ApiSettingsModal() {
             </span>
           </div>
         </form>
+
+        {tvMode ? (
+          <TvQrPairingPanel
+            active={isOpen}
+            busy={validating}
+            onKeysReceived={(payload) => void handleQrKeysReceived(payload)}
+          />
+        ) : null}
+        </div>
       </div>
     </div>
   );

@@ -573,18 +573,26 @@ export function TitleDetailsPage() {
       {/* Актёрский состав */}
       {cast.length > 0 ? (
         <section className="space-y-4">
-          <h2 className="font-display text-xl font-bold tracking-tight text-slate-950 dark:text-white">
-            В главных ролях
-          </h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="font-display text-xl font-bold tracking-tight text-slate-950 dark:text-white">
+              В главных ролях
+            </h2>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Выберите актёра, чтобы найти фильмы с ним
+            </span>
+          </div>
           <div className="cinema-scroll -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
             {cast.map((person) => {
               const photoProps = buildProfileImageProps(person.profilePath);
               return (
-                <div
+                <Link
                   key={`${person.id}-${person.name}`}
-                  className="w-32 shrink-0 space-y-2"
+                  to={`/catalog?q=${encodeURIComponent(person.name)}`}
+                  data-testid="cast-member-card"
+                  aria-label={`Найти фильмы с участием ${person.name}`}
+                  className="group block w-32 shrink-0 space-y-2 rounded-xl p-1 text-left transition-colors focus-visible:outline-2 focus-visible:outline-blue-500"
                 >
-                  <div className="aspect-[3/4] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-white/[0.08] dark:bg-[#11151E]">
+                  <div className="aspect-[3/4] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-colors group-hover:border-blue-500/60 dark:border-white/[0.08] dark:bg-[#11151E] dark:group-hover:border-blue-400/50">
                     {photoProps ? (
                       <img
                         src={photoProps.src}
@@ -594,7 +602,7 @@ export function TitleDetailsPage() {
                         referrerPolicy="no-referrer"
                         loading="lazy"
                         decoding="async"
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
                       />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-slate-400 dark:text-slate-600">
@@ -603,7 +611,7 @@ export function TitleDetailsPage() {
                     )}
                   </div>
                   <div>
-                    <p className="line-clamp-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    <p className="line-clamp-1 text-sm font-semibold text-slate-900 transition-colors group-hover:text-blue-600 dark:text-slate-100 dark:group-hover:text-blue-400">
                       {person.name}
                     </p>
                     {person.character ? (
@@ -612,7 +620,7 @@ export function TitleDetailsPage() {
                       </p>
                     ) : null}
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>

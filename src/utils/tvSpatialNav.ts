@@ -12,6 +12,33 @@ export interface FocusRect {
 }
 
 const DIRECTION_EPSILON = 2;
+const DEFAULT_DUPLICATE_GUARD_MS = 45;
+
+/**
+ * Предотвращает двойное срабатывание одного физического нажатия на Bluetooth-пульте Android TV
+ * (когда WebView за 5–25 мс отправляет сразу два не-repeat события стрелки).
+ * Удержание клавиши (isRepeat === true) пропускается без ограничений.
+ */
+export function shouldAcceptTvKeyEvent(
+  action: TvRemoteAction,
+  isRepeat: boolean,
+  lastAction: TvRemoteAction,
+  lastTimestamp: number,
+  now: number,
+  debounceMs = DEFAULT_DUPLICATE_GUARD_MS,
+): boolean {
+  if (!action) return false;
+  if (isRepeat) return true;
+  if (
+    action === lastAction &&
+    (action === 'up' || action === 'down' || action === 'left' || action === 'right') &&
+    now - lastTimestamp >= 0 &&
+    now - lastTimestamp < debounceMs
+  ) {
+    return false;
+  }
+  return true;
+}
 
 /**
  * Преобразует событие клавиатуры или пульта Android TV / SberBox
@@ -77,7 +104,8 @@ export function mapKeyToTvAction(key: string, keyCode?: number): TvRemoteAction 
 
 /**
  * Геометрический поиск ближайшего фокусируемого элемента в заданном направлении D-Pad.
- * Приоритезирует элементы на той же строке (для влево/вправо) или колонке (для вверх/вниз).
+ * Приоритезирует непосредственного соседа на той же строке (для влево/вправо)
+ * или колонке (для вверх/вниз), в том числе для плотных сегментированных кнопок с нулевым зазором.
  */
 export function findNextFocusableIndex(
   origin: FocusRect,
@@ -128,7 +156,8 @@ export function findNextFocusableIndex(
           ? Math.max(0, c.left - origin.right)
           : Math.max(0, origin.left - c.right);
       const centerDist = Math.abs(cx - ox);
-      const primary = edgeGap > 0 ? edgeGap : centerDist;
+      // Монотонная метрика без скачка при edgeGap === 0: соприкасающийся сосед всегда ближе, чем элемент через один
+      const primary = edgeGap + centerDist * 0.08;
 
       const overlapY = Math.max(
         0,
@@ -145,7 +174,7 @@ export function findNextFocusableIndex(
           ? Math.max(0, c.top - origin.bottom)
           : Math.max(0, origin.top - c.bottom);
       const centerDist = Math.abs(cy - oy);
-      const primary = edgeGap > 0 ? edgeGap : centerDist;
+      const primary = edgeGap + centerDist * 0.08;
 
       const overlapX = Math.max(
         0,

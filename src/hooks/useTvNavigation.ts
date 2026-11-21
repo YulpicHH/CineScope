@@ -4,8 +4,10 @@ import { isTvMode } from '../utils/platform';
 import {
   findNextFocusableIndex,
   mapKeyToTvAction,
+  shouldAcceptTvKeyEvent,
   type FocusRect,
   type TvDirection,
+  type TvRemoteAction,
 } from '../utils/tvSpatialNav';
 
 const TV_FOCUSABLE_SELECTOR = [
@@ -15,6 +17,11 @@ const TV_FOCUSABLE_SELECTOR = [
   'select:not([disabled]):not([tabindex="-1"])',
   'textarea:not([disabled]):not([tabindex="-1"])',
   '[data-tv-focusable="true"]:not([aria-disabled="true"]):not([tabindex="-1"])',
+].join(', ');
+
+const TEXT_INPUT_SELECTOR = [
+  'input:not([disabled]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"])',
+  'textarea:not([disabled])',
 ].join(', ');
 
 const TV_FOCUSED_CLASS = 'tv-focused';
@@ -53,7 +60,9 @@ function getFocusableElements(scope: ParentNode): HTMLElement[] {
   return raw.filter(isElementVisible);
 }
 
-function isTextInputElement(el: Element | null): el is HTMLInputElement | HTMLTextAreaElement {
+function isTextInputElement(
+  el: Element | null,
+): el is HTMLInputElement | HTMLTextAreaElement {
   if (!el) return false;
   if (el instanceof HTMLTextAreaElement) return true;
   if (el instanceof HTMLInputElement) {
@@ -83,7 +92,58 @@ function toFocusRect(el: HTMLElement): FocusRect {
   };
 }
 
-function pickInitialFocusTarget(scope: HTMLElement, preferMain: boolean): HTMLElement | null {
+function lockInputForTvBrowse(el: HTMLInputElement | HTMLTextAreaElement): void {
+  if (el.dataset.tvManagedInput !== 'true') {
+    el.dataset.tvManagedInput = 'true';
+    el.dataset.tvOrigInputMode = el.getAttribute('inputmode') ?? '';
+    el.dataset.tvOrigReadOnly = el.readOnly ? 'true' : 'false';
+  }
+  el.readOnly = true;
+  el.setAttribute('inputmode', 'none');
+  el.dataset.tvEditing = 'false';
+}
+
+function unlockInputForTvEdit(el: HTMLInputElement | HTMLTextAreaElement): void {
+  if (el.dataset.tvManagedInput !== 'true') {
+    el.dataset.tvManagedInput = 'true';
+    el.dataset.tvOrigInputMode = el.getAttribute('inputmode') ?? '';
+    el.dataset.tvOrigReadOnly = el.readOnly ? 'true' : 'false';
+  }
+  el.readOnly = false;
+  const origInputMode = el.dataset.tvOrigInputMode;
+  if (origInputMode) {
+    el.setAttribute('inputmode', origInputMode);
+  } else if (el instanceof HTMLInputElement && el.type.toLowerCase() === 'search') {
+    el.setAttribute('inputmode', 'search');
+  } else {
+    el.removeAttribute('inputmode');
+  }
+  el.dataset.tvEditing = 'true';
+}
+
+function restoreManagedInputs(): void {
+  const managed = document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+    '[data-tv-managed-input="true"]',
+  );
+  for (const el of managed) {
+    el.readOnly = el.dataset.tvOrigReadOnly === 'true';
+    const origMode = el.dataset.tvOrigInputMode;
+    if (origMode) {
+      el.setAttribute('inputmode', origMode);
+    } else {
+      el.removeAttribute('inputmode');
+    }
+    delete el.dataset.tvManagedInput;
+    delete el.dataset.tvOrigInputMode;
+    delete el.dataset.tvOrigReadOnly;
+    delete el.dataset.tvEditing;
+  }
+}
+
+function pickInitialFocusTarget(
+  scope: HTMLElement,
+  preferMain: boolean,
+): HTMLElement | null {
   const explicit = scope.querySelector<HTMLElement>('[data-tv-autofocus="true"]');
   if (explicit && isElementVisible(explicit)) {
     return explicit;
@@ -105,6 +165,10 @@ function pickInitialFocusTarget(scope: HTMLElement, preferMain: boolean): HTMLEl
 
 /**
  * Пространственная навигация с пульта (D-Pad) для Android TV / SberBox.
+ * Поддерживает двухфазный режим текстовых полей:
+ * — Browse Mode: при наведении стрелками клавиатура НЕ открывается;
+ * — Edit Mode: открывается только по нажатию «ОК» (Enter / DPAD_CENTER),
+ *   а «Назад» (Escape/Back) или подтверждение поиска возвращает поле в Browse Mode.
  * Активируется исключительно при isTvMode() === true и не влияет на десктоп/веб/PWA.
  */
 export function useTvNavigation(): void {
@@ -115,7 +179,10 @@ export function useTvNavigation(): void {
   const lastFocusedRef = useRef<HTMLElement | null>(null);
   const preModalFocusRef = useRef<HTMLElement | null>(null);
   const activeModalRef = useRef<HTMLElement | null>(null);
+  const editingInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const pendingRouteAutofocusRef = useRef(false);
+  const lastKeyActionRef = useRef<TvRemoteAction>(null);
+  const lastKeyTimeRef = useRef(0);
   const locationRef = useRef(location);
   locationRef.current = location;
 
@@ -124,8 +191,77 @@ export function useTvNavigation(): void {
 
     document.body.classList.add('tv-mode');
 
+    const syncAllInputsBrowseLock = () => {
+      const inputs = document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+        TEXT_INPUT_SELECTOR,
+      );
+      for (const el of inputs) {
+        if (!isTextInputElement(el)) continue;
+        if (editingInputRef.current === el) continue;
+        lockInputForTvBrowse(el);
+      }
+    };
+
+    const enterTvInputEditMode = (el: HTMLInputElement | HTMLTextAreaElement) => {
+      if (editingInputRef.current && editingInputRef.current !== el) {
+        lockInputForTvBrowse(editingInputRef.current);
+      }
+      editingInputRef.current = el;
+      unlockInputForTvEdit(el);
+
+      if (lastFocusedRef.current && lastFocusedRef.current !== el) {
+        lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
+      }
+      el.classList.add(TV_FOCUSED_CLASS);
+      lastFocusedRef.current = el;
+
+      // Повторный focus + click внутри пользовательского нажатия ОК гарантированно поднимает IME на Android TV
+      el.focus({ preventScroll: true });
+      try {
+        el.click();
+      } catch {
+        // Игнорируем ограничения браузера
+      }
+      try {
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      } catch {
+        // Некоторые типы input не поддерживают setSelectionRange
+      }
+    };
+
+    const exitTvInputEditMode = (
+      el: HTMLInputElement | HTMLTextAreaElement,
+      keepFocus: boolean,
+    ) => {
+      if (editingInputRef.current === el) {
+        editingInputRef.current = null;
+      }
+      lockInputForTvBrowse(el);
+      el.blur();
+
+      if (keepFocus && el.isConnected && isElementVisible(el)) {
+        // Возвращаем фокус на это же поле в Browse Mode (readOnly + inputMode="none"),
+        // чтобы рамка фокуса осталась на поле, а экранная клавиатура скрылась
+        el.focus({ preventScroll: true });
+        el.classList.add(TV_FOCUSED_CLASS);
+        lastFocusedRef.current = el;
+      }
+    };
+
     const applyFocus = (target: HTMLElement | null, scrollIntoView = true) => {
       if (!target || !isElementVisible(target)) return;
+
+      if (editingInputRef.current && editingInputRef.current !== target) {
+        lockInputForTvBrowse(editingInputRef.current);
+        editingInputRef.current = null;
+      }
+
+      // Перед переводом фокуса стрелками на текстовое поле обязательно переводим его в Browse Mode,
+      // чтобы Android WebView НЕ открывал экранную клавиатуру автоматически
+      if (isTextInputElement(target) && editingInputRef.current !== target) {
+        lockInputForTvBrowse(target);
+      }
 
       if (lastFocusedRef.current && lastFocusedRef.current !== target) {
         lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
@@ -151,9 +287,15 @@ export function useTvNavigation(): void {
     const ensureFocusInActiveScope = (preferMain = true) => {
       const modal = getTopmostModal();
       const scope = modal ?? document.body;
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const active =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-      if (active && active !== document.body && scope.contains(active) && isElementVisible(active)) {
+      if (
+        active &&
+        active !== document.body &&
+        scope.contains(active) &&
+        isElementVisible(active)
+      ) {
         if (lastFocusedRef.current && lastFocusedRef.current !== active) {
           lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
         }
@@ -182,6 +324,10 @@ export function useTvNavigation(): void {
         return;
       }
 
+      if (isTextInputElement(target) && editingInputRef.current !== target) {
+        lockInputForTvBrowse(target);
+      }
+
       if (lastFocusedRef.current && lastFocusedRef.current !== target) {
         lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
       }
@@ -191,8 +337,25 @@ export function useTvNavigation(): void {
 
     const handleFocusOut = (event: FocusEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
-      if (target) {
-        target.classList.remove(TV_FOCUSED_CLASS);
+      if (!target) return;
+
+      target.classList.remove(TV_FOCUSED_CLASS);
+
+      const editing = editingInputRef.current;
+      if (editing && editing === target) {
+        const nextFocus =
+          event.relatedTarget instanceof HTMLElement ? event.relatedTarget : null;
+        if (nextFocus !== editing) {
+          editingInputRef.current = null;
+          lockInputForTvBrowse(editing);
+        }
+      }
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target && isTextInputElement(target)) {
+        enterTvInputEditMode(target);
       }
     };
 
@@ -245,6 +408,7 @@ export function useTvNavigation(): void {
       if (modal) {
         event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation();
         const closeButton =
           modal.querySelector<HTMLElement>('[data-tv-modal-close="true"]') ??
           modal.querySelector<HTMLElement>('[data-testid="close-api-settings-button"]') ??
@@ -259,6 +423,7 @@ export function useTvNavigation(): void {
       if (currentPath !== '/') {
         event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation();
         if (window.history.length > 1) {
           navigate(-1);
         } else {
@@ -273,18 +438,74 @@ export function useTvNavigation(): void {
       const action = mapKeyToTvAction(event.key, event.keyCode);
       if (!action) return;
 
+      const now = performance.now();
+      if (
+        !shouldAcceptTvKeyEvent(
+          action,
+          event.repeat,
+          lastKeyActionRef.current,
+          lastKeyTimeRef.current,
+          now,
+        )
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        return;
+      }
+      lastKeyActionRef.current = action;
+      lastKeyTimeRef.current = now;
+
       // Пользователь начал ручную навигацию пультом — отменяем отложенный автофокус маршрута
       pendingRouteAutofocusRef.current = false;
 
       const active =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      const inTextInput = isTextInputElement(active);
+      const activeTextInput = isTextInputElement(active) ? active : null;
+      const isEditing =
+        activeTextInput !== null &&
+        editingInputRef.current === activeTextInput &&
+        activeTextInput.dataset.tvEditing === 'true';
 
-      if (action === 'back') {
-        // Внутри поля ввода Backspace удаляет символ, а Escape/BrowserBack выходит из поля или закрывает модалку
-        if (inTextInput && (event.key === 'Backspace' || event.keyCode === 8)) {
+      // --- Обработка внутри текстового поля в режиме ВВОДА (Edit Mode) ---
+      if (activeTextInput && isEditing) {
+        if (action === 'back') {
+          // Backspace удаляет символы внутри поля ввода
+          if (event.key === 'Backspace' || event.keyCode === 8) {
+            return;
+          }
+          // Escape / кнопка «Назад» на пульте скрывает клавиатуру и возвращает поле в Browse Mode
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          exitTvInputEditMode(activeTextInput, true);
           return;
         }
+
+        if (action === 'select') {
+          // Нажатие «Готово» / Enter завершает ввод и скрывает экранную клавиатуру, оставляя фокус на поле
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          exitTvInputEditMode(activeTextInput, true);
+          return;
+        }
+
+        if (action === 'up' || action === 'down') {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          exitTvInputEditMode(activeTextInput, false);
+          moveFocusInDirection(action);
+          return;
+        }
+
+        // Влево/вправо в режиме редактирования двигают текстовый курсор внутри строки
+        return;
+      }
+
+      // --- Обработка вне режима редактирования (включая Browse Mode текстовых полей) ---
+      if (action === 'back') {
         handleBackAction(event);
         return;
       }
@@ -292,71 +513,57 @@ export function useTvNavigation(): void {
       if (action === 'select') {
         if (!active || active === document.body) {
           event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
           ensureFocusInActiveScope(true);
           return;
         }
 
-        // Для input / textarea / select оставляем нативное поведение (ввод, отправка формы, раскрытие списка)
-        if (
-          inTextInput ||
-          active instanceof HTMLSelectElement
-        ) {
+        if (activeTextInput) {
+          // Только осознанное нажатие «ОК» переводит поле в режим редактирования и открывает клавиатуру
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          enterTvInputEditMode(activeTextInput);
+          return;
+        }
+
+        if (active instanceof HTMLSelectElement) {
           return;
         }
 
         event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
         active.click();
         return;
       }
 
-      // Стрелки D-Pad
-      if (inTextInput) {
-        // Внутри поля ввода стрелки влево/вправо двигают курсор; на самом правом краю ArrowRight переходит к кнопке рядом (например, показать ключ)
-        if (action === 'left' || action === 'right') {
-          const valLen = active.value.length;
-          const selStart = active.selectionStart;
-          const selEnd = active.selectionEnd;
-          const atRightEdge =
-            action === 'right' &&
-            selStart !== null &&
-            selEnd !== null &&
-            selStart === valLen &&
-            selEnd === valLen;
-          const atLeftEdge =
-            action === 'left' &&
-            selStart === 0 &&
-            selEnd === 0;
-
-          if (!atRightEdge && !atLeftEdge) {
-            return;
-          }
-          // Пробуем перейти к соседнему элементу в той же строке; если нет — остаёмся в поле
-          const moved = moveFocusInDirection(action);
-          if (moved) {
-            event.preventDefault();
-          }
-          return;
-        }
-
-        // ArrowUp / ArrowDown всегда позволяют свободно выйти из поля ввода вверх или вниз
-        event.preventDefault();
-        moveFocusInDirection(action);
-        return;
-      }
-
+      // Стрелки D-Pad (включая свободный уход с текстового поля в Browse Mode)
       event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       moveFocusInDirection(action);
     };
 
-    // Отслеживаем открытие/закрытие модалок и удаление сфокусированных элементов
+    // Отслеживаем открытие/закрытие модалок, появление новых полей ввода и удаление сфокусированных элементов
     let rafId: number | null = null;
     const syncScopeAfterMutation = () => {
+      syncAllInputsBrowseLock();
+
       const currentModal = getTopmostModal();
       const prevModal = activeModalRef.current;
 
       if (currentModal && currentModal !== prevModal) {
-        // Открылось модальное окно: запоминаем фокус и переводим его внутрь модалки
-        if (!prevModal && document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+        if (editingInputRef.current) {
+          lockInputForTvBrowse(editingInputRef.current);
+          editingInputRef.current = null;
+        }
+        if (
+          !prevModal &&
+          document.activeElement instanceof HTMLElement &&
+          document.activeElement !== document.body
+        ) {
           preModalFocusRef.current = document.activeElement;
         }
         activeModalRef.current = currentModal;
@@ -368,7 +575,10 @@ export function useTvNavigation(): void {
       }
 
       if (!currentModal && prevModal) {
-        // Модальное окно закрылось: возвращаем фокус на предыдущий элемент или первый доступный
+        if (editingInputRef.current) {
+          lockInputForTvBrowse(editingInputRef.current);
+          editingInputRef.current = null;
+        }
         activeModalRef.current = null;
         const restore = preModalFocusRef.current;
         preModalFocusRef.current = null;
@@ -380,11 +590,22 @@ export function useTvNavigation(): void {
         return;
       }
 
+      // Если пользователь прямо сейчас набирает текст в живом поле ввода — никогда не крадём у него фокус
+      if (
+        editingInputRef.current &&
+        editingInputRef.current.isConnected &&
+        isElementVisible(editingInputRef.current)
+      ) {
+        return;
+      }
+
       // Если маршрут недавно сменился и в <main> наконец загрузился контент (после скелетона) — переводим фокус туда
       if (!currentModal && pendingRouteAutofocusRef.current) {
         const mainEl = document.querySelector<HTMLElement>('main');
         if (mainEl) {
-          const explicit = mainEl.querySelector<HTMLElement>('[data-tv-autofocus="true"]');
+          const explicit = mainEl.querySelector<HTMLElement>(
+            '[data-tv-autofocus="true"]',
+          );
           const candidate =
             explicit && isElementVisible(explicit)
               ? explicit
@@ -397,10 +618,15 @@ export function useTvNavigation(): void {
         }
       }
 
-      // Если сфокусированный элемент исчез из DOM (например, завершилась загрузка скелетона), восстанавливаем фокус
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const active =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const scope = currentModal ?? document.body;
-      if (!active || active === document.body || !scope.contains(active) || !isElementVisible(active)) {
+      if (
+        !active ||
+        active === document.body ||
+        !scope.contains(active) ||
+        !isElementVisible(active)
+      ) {
         ensureFocusInActiveScope(true);
       }
     };
@@ -421,8 +647,10 @@ export function useTvNavigation(): void {
     window.addEventListener('keydown', handleKeyDown, true);
     document.addEventListener('focusin', handleFocusIn, true);
     document.addEventListener('focusout', handleFocusOut, true);
+    document.addEventListener('pointerdown', handlePointerDown, true);
 
-    // Начальный фокус при запуске приложения
+    syncAllInputsBrowseLock();
+
     const initTimer = window.setTimeout(() => {
       syncScopeAfterMutation();
       ensureFocusInActiveScope(true);
@@ -437,6 +665,9 @@ export function useTvNavigation(): void {
       window.removeEventListener('keydown', handleKeyDown, true);
       document.removeEventListener('focusin', handleFocusIn, true);
       document.removeEventListener('focusout', handleFocusOut, true);
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      editingInputRef.current = null;
+      restoreManagedInputs();
       if (lastFocusedRef.current) {
         lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
       }
@@ -444,18 +675,32 @@ export function useTvNavigation(): void {
     };
   }, [tvEnabled, navigate]);
 
-  // Автоматический перевод фокуса на первый доступный элемент при смене маршрута
+  // Автоматический перевод фокуса только при реальной смене маршрута (location.pathname),
+  // но НИКОГДА при обновлении фильтров/поиска в location.search!
   useEffect(() => {
     if (!tvEnabled || typeof document === 'undefined') return;
 
     pendingRouteAutofocusRef.current = true;
 
     const focusRouteStart = () => {
+      // Если пользователь уже вводит текст или взаимодействует с элементом внутри <main> — не сбрасываем фокус
+      if (
+        editingInputRef.current &&
+        editingInputRef.current.isConnected &&
+        isElementVisible(editingInputRef.current)
+      ) {
+        pendingRouteAutofocusRef.current = false;
+        return;
+      }
+
       const modal = getTopmostModal();
       if (modal) {
         pendingRouteAutofocusRef.current = false;
         const modalTarget = pickInitialFocusTarget(modal, false);
         if (modalTarget) {
+          if (isTextInputElement(modalTarget)) {
+            lockInputForTvBrowse(modalTarget);
+          }
           if (lastFocusedRef.current && lastFocusedRef.current !== modalTarget) {
             lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
           }
@@ -467,7 +712,15 @@ export function useTvNavigation(): void {
       }
 
       const mainEl = document.querySelector<HTMLElement>('main');
-      const mainExplicit = mainEl?.querySelector<HTMLElement>('[data-tv-autofocus="true"]') ?? null;
+      const active =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      if (mainEl && active && mainEl.contains(active) && isElementVisible(active)) {
+        pendingRouteAutofocusRef.current = false;
+        return;
+      }
+
+      const mainExplicit =
+        mainEl?.querySelector<HTMLElement>('[data-tv-autofocus="true"]') ?? null;
       const mainTarget =
         mainExplicit && isElementVisible(mainExplicit)
           ? mainExplicit
@@ -477,6 +730,9 @@ export function useTvNavigation(): void {
 
       if (mainTarget) {
         pendingRouteAutofocusRef.current = false;
+        if (isTextInputElement(mainTarget)) {
+          lockInputForTvBrowse(mainTarget);
+        }
         if (lastFocusedRef.current && lastFocusedRef.current !== mainTarget) {
           lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
         }
@@ -488,6 +744,9 @@ export function useTvNavigation(): void {
 
       const fallback = pickInitialFocusTarget(document.body, false);
       if (fallback) {
+        if (isTextInputElement(fallback)) {
+          lockInputForTvBrowse(fallback);
+        }
         if (lastFocusedRef.current && lastFocusedRef.current !== fallback) {
           lastFocusedRef.current.classList.remove(TV_FOCUSED_CLASS);
         }
@@ -504,5 +763,5 @@ export function useTvNavigation(): void {
       window.cancelAnimationFrame(frameId);
       window.clearTimeout(fallbackTimer);
     };
-  }, [tvEnabled, location.pathname, location.search]);
+  }, [tvEnabled, location.pathname]);
 }

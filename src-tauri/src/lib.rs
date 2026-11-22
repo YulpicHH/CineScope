@@ -1,5 +1,7 @@
 #[cfg(desktop)]
 mod adblock;
+#[cfg(desktop)]
+mod trailer_bridge;
 mod tv_pairing;
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +24,8 @@ use tauri::{
 };
 use tauri::{Manager, RunEvent, State};
 use tauri_plugin_http::reqwest;
+#[cfg(desktop)]
+use trailer_bridge::TrailerBridgeState;
 use tv_pairing::{
     poll_pairing_session, start_pairing_session, TvPairingPollResult, TvPairingSessionInfo,
     TvPairingState,
@@ -942,6 +946,28 @@ async fn tmdb_api_get(
     })
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+fn get_trailer_embed_url(
+    video_key: String,
+    bridge_state: State<'_, TrailerBridgeState>,
+) -> Result<String, String> {
+    bridge_state.ensure_embed_url(&video_key)
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn get_trailer_embed_url(video_key: String) -> Result<String, String> {
+    let trimmed = video_key.trim();
+    if trimmed.is_empty() {
+        return Err("Некорректный идентификатор трейлера YouTube.".to_string());
+    }
+    Ok(format!(
+        "https://www.youtube-nocookie.com/embed/{}?rel=0&modestbranding=1&playsinline=1",
+        trimmed
+    ))
+}
+
 #[tauri::command]
 fn start_tv_pairing_server(
     app: tauri::AppHandle,
@@ -981,10 +1007,12 @@ pub fn run() {
         .manage(PlayerWindowState {
             browser_child: Mutex::new(None),
         })
+        .manage(TrailerBridgeState::default())
         .invoke_handler(tauri::generate_handler![
             fetch_kinopoisk_candidates,
             tmdb_api_get,
             open_watch_window,
+            get_trailer_embed_url,
             check_player_browsers,
             check_firefox_available,
             start_tv_pairing_server,
@@ -997,6 +1025,7 @@ pub fn run() {
         fetch_kinopoisk_candidates,
         tmdb_api_get,
         open_watch_window,
+        get_trailer_embed_url,
         check_player_browsers,
         check_firefox_available,
         start_tv_pairing_server,
@@ -1013,6 +1042,9 @@ pub fn run() {
         if let RunEvent::Exit = event {
             if let Some(player_state) = app_handle.try_state::<PlayerWindowState>() {
                 terminate_browser_player(&player_state);
+            }
+            if let Some(bridge_state) = app_handle.try_state::<TrailerBridgeState>() {
+                bridge_state.stop();
             }
             if let Some(pairing_state) = app_handle.try_state::<TvPairingState>() {
                 pairing_state.stop_active();

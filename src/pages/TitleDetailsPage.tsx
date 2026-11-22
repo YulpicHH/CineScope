@@ -55,6 +55,11 @@ import {
   isTvMode,
   openExternalUrl,
 } from '../utils/platform';
+import {
+  buildDirectYouTubeEmbedUrl,
+  buildYouTubeWatchUrl,
+  resolveTrailerEmbedUrl,
+} from '../utils/youtubeEmbed';
 
 type WatchResolutionState =
   | { status: 'idle' | 'loading' }
@@ -97,6 +102,36 @@ export function TitleDetailsPage() {
   const [missingKeyNotice, setMissingKeyNotice] = useState(false);
   const [watchWindowError, setWatchWindowError] = useState<string | null>(null);
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
+
+  const primaryTrailerKey = details?.videos?.[0]?.key ?? null;
+  const [trailerEmbedUrl, setTrailerEmbedUrl] = useState<string | null>(() => {
+    if (!primaryTrailerKey || isDesktopTauriRuntime()) return null;
+    return buildDirectYouTubeEmbedUrl(primaryTrailerKey);
+  });
+
+  useEffect(() => {
+    if (!primaryTrailerKey) {
+      setTrailerEmbedUrl(null);
+      return;
+    }
+
+    if (!isDesktopTauriRuntime()) {
+      setTrailerEmbedUrl(buildDirectYouTubeEmbedUrl(primaryTrailerKey));
+      return;
+    }
+
+    let cancelled = false;
+    setTrailerEmbedUrl(null);
+    void resolveTrailerEmbedUrl(primaryTrailerKey).then((resolved) => {
+      if (!cancelled) {
+        setTrailerEmbedUrl(resolved);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [primaryTrailerKey]);
 
   const latestScrollYRef = useRef(0);
   const isLeavingRef = useRef(false);
@@ -777,24 +812,50 @@ export function TitleDetailsPage() {
 
       {/* Трейлер */}
       <section className="space-y-4">
-        <div className="flex items-center gap-2">
-          <PlayCircle className="h-5 w-5 text-blue-500" aria-hidden="true" />
-          <h2 className="font-display text-xl font-bold tracking-tight text-slate-950 dark:text-white">
-            Трейлер
-          </h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <PlayCircle className="h-5 w-5 text-blue-500" aria-hidden="true" />
+            <h2 className="font-display text-xl font-bold tracking-tight text-slate-950 dark:text-white">
+              Трейлер
+            </h2>
+          </div>
+
+          {trailer && buildYouTubeWatchUrl(trailer.key) ? (
+            <button
+              type="button"
+              onClick={() => {
+                const watchUrl = buildYouTubeWatchUrl(trailer.key);
+                if (watchUrl) {
+                  void openExternalUrl(watchUrl);
+                }
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:border-blue-500/40 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-white/10 dark:bg-[#11151E] dark:text-slate-300 dark:hover:border-blue-400/40 dark:hover:text-blue-400"
+            >
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              Открыть на YouTube
+            </button>
+          ) : null}
         </div>
 
         {trailer ? (
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-black dark:border-white/[0.08]">
             <div className="aspect-video w-full">
-              <iframe
-                src={`https://www.youtube.com/embed/${trailer.key}`}
-                title={trailer.name}
-                loading="lazy"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                className="h-full w-full border-0"
-              />
+              {trailerEmbedUrl ? (
+                <iframe
+                  key={trailerEmbedUrl}
+                  src={trailerEmbedUrl}
+                  title={trailer.name}
+                  loading="lazy"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                  allowFullScreen
+                  className="h-full w-full border-0"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center bg-[#090B10] text-slate-400">
+                  <Loader2 className="h-6 w-6 animate-spin" aria-hidden="true" />
+                </div>
+              )}
             </div>
           </div>
         ) : (
